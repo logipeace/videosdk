@@ -1,0 +1,97 @@
+PODS:
+  - camera_avfoundation (0.0.1):
+    - Flutter
+  - device_info_plus (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - flutter_foreground_task (0.0.1):
+    - Flutter
+  - fluttertoast (0.0.2):
+    - Flutter
+    - Toast
+  - path_provider_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - permission_handler_apple (9.3.0):
+    - Flutter
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - Toast (4.1.1)
+  - touch_ripple_effect (0.0.1):
+    - Flutter
+  - videosdk (0.0.1):
+    - Flutter
+    - videosdk_webrtc
+  - videosdk_media_effects (0.0.1):
+    - Flutter
+    - videosdk_webrtc
+  - videosdk_webrtc (0.10.3):
+    - Flutter
+    - WebRTC-SDK (= 114.5735.09)
+  - WebRTC-SDK (114.5735.09)
+
+DEPENDENCIES:
+  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
+  - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
+  - Flutter (from `Flutter`)
+  - flutter_foreground_task (from `.symlinks/plugins/flutter_foreground_task/ios`)
+  - fluttertoast (from `.symlinks/plugins/fluttertoast/ios`)
+  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
+  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
+  - touch_ripple_effect (from `.symlinks/plugins/touch_ripple_effect/ios`)
+  - videosdk (from `.symlinks/plugins/videosdk/ios`)
+  - videosdk_media_effects (from `.symlinks/plugins/videosdk_media_effects/ios`)
+  - videosdk_webrtc (from `.symlinks/plugins/videosdk_webrtc/ios`)
+
+SPEC REPOS:
+  trunk:
+    - Toast
+    - WebRTC-SDK
+
+EXTERNAL SOURCES:
+  camera_avfoundation:
+    :path: ".symlinks/plugins/camera_avfoundation/ios"
+  device_info_plus:
+    :path: ".symlinks/plugins/device_info_plus/ios"
+  Flutter:
+    :path: Flutter
+  flutter_foreground_task:
+    :path: ".symlinks/plugins/flutter_foreground_task/ios"
+  fluttertoast:
+    :path: ".symlinks/plugins/fluttertoast/ios"
+  path_provider_foundation:
+    :path: ".symlinks/plugins/path_provider_foundation/darwin"
+  permission_handler_apple:
+    :path: ".symlinks/plugins/permission_handler_apple/ios"
+  shared_preferences_foundation:
+    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
+  touch_ripple_effect:
+    :path: ".symlinks/plugins/touch_ripple_effect/ios"
+  videosdk:
+    :path: ".symlinks/plugins/videosdk/ios"
+  videosdk_media_effects:
+    :path: ".symlinks/plugins/videosdk_media_effects/ios"
+  videosdk_webrtc:
+    :path: ".symlinks/plugins/videosdk_webrtc/ios"
+
+SPEC CHECKSUMS:
+  camera_avfoundation: dd002b0330f4981e1bbcb46ae9b62829237459a4
+  device_info_plus: 97af1d7e84681a90d0693e63169a5d50e0839a0d
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
+  flutter_foreground_task: 21ef182ab0a29a3005cc72cd70e5f45cb7f7f817
+  fluttertoast: e9a18c7be5413da53898f660530c56f35edfba9c
+  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
+  permission_handler_apple: 9878588469a2b0d0fc1e048d9f43605f92e6cec2
+  shared_preferences_foundation: fcdcbc04712aee1108ac7fda236f363274528f78
+  Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
+  touch_ripple_effect: 5b850cbec069237959ef95e7e81e7ee7f934ac76
+  videosdk: 1c91ee1eb4cbf2ffccd5740ee75cfe7b656b6143
+  videosdk_media_effects: 69e757ab14e93eef94d1ce5aea9cd47349af3d6c
+  videosdk_webrtc: 99da4edb27a4abd88a7e88b9be78398f0b4d91ec
+  WebRTC-SDK: efc3e67e0355b1ee14bfe3c91188cada6000cb94
+
+PODFILE CHECKSUM: fe12e342ff456e276c26d596fd7f99d452ba9688
+
+COCOAPODS: 1.15.2
