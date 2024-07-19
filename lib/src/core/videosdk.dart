@@ -350,7 +350,7 @@ class VideoSDK {
           AppleAudioCategoryOption.allowBluetooth,
           AppleAudioCategoryOption.allowBluetoothA2DP
         },
-        appleAudioMode: AppleAudioMode.videoChat));
+        appleAudioMode: AppleAudioMode.voiceChat));
   }
 
   static Future<List<DeviceInfo>?> getDevices() async {
