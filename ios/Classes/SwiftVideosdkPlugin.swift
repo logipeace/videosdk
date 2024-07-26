@@ -3,15 +3,12 @@ import UIKit
 import ReplayKit
 import Foundation
 
-
 public class SwiftVideosdkPlugin: NSObject, FlutterPlugin {
-    let videoSDK = VideoSDK.getInstance
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "videosdk", binaryMessenger: registrar.messenger())
     let instance = SwiftVideosdkPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
-
 
     let eventChannel = FlutterEventChannel(name: "videosdk-event", binaryMessenger: registrar.messenger())
     let streamHandler = ScreenShareEventStreamHandler();
@@ -52,24 +49,6 @@ public class SwiftVideosdkPlugin: NSObject, FlutterPlugin {
             let memoryUsage = memoryUsage();
             return result(memoryUsage);
           }
-        else if call.method == "processorMethod" {
-    if let args = call.arguments as? [String: Any],
-       let videoProcessorName = args["videoProcessorName"] as? String {
-        
-        let videoProcessorMap = videoSDK.getRegisteredVideoProcessors()
-        if let bgProcessor = videoProcessorMap[videoProcessorName] {
-            videoSDK.setVideoProcessor(bgProcessor)
-            result("Processor has been set")
-        } else {
-            result(FlutterError(code: "ProcessorNotFound", message: "No processor found with the name \(videoProcessorName)", details: nil))
-        }
-    } else {
-        videoSDK.setVideoProcessor(nil)
-    }
-}
-
-
-
   }
 
 

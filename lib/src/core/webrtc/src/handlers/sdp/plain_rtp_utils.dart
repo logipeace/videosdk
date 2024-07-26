@@ -1,4 +1,4 @@
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../../handlers/sdp/media_section.dart';
 import '../../rtp_parameters.dart';

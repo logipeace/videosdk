@@ -1,9 +1,7 @@
 PODS:
-  - device_info_plus (0.0.1):
+  - flutter_webrtc (0.9.22):
     - FlutterMacOS
-  - flutter_webrtc (0.11.0):
-    - FlutterMacOS
-    - WebRTC-SDK (= 125.6422.02)
+    - WebRTC-SDK (= 104.5112.12)
   - FlutterMacOS (1.0.0)
   - path_provider_foundation (0.0.1):
     - Flutter
@@ -13,14 +11,13 @@ PODS:
     - FlutterMacOS
   - videosdk (0.0.1):
     - FlutterMacOS
-  - WebRTC-SDK (125.6422.02)
+  - WebRTC-SDK (104.5112.12)
 
 DEPENDENCIES:
-  - device_info_plus (from `Flutter/ephemeral/.symlinks/plugins/device_info_plus/macos`)
   - flutter_webrtc (from `Flutter/ephemeral/.symlinks/plugins/flutter_webrtc/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
-  - path_provider_foundation (from `Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin`)
-  - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin`)
+  - path_provider_foundation (from `Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/macos`)
+  - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/macos`)
   - videosdk (from `Flutter/ephemeral/.symlinks/plugins/videosdk/macos`)
 
 SPEC REPOS:
@@ -28,28 +25,25 @@ SPEC REPOS:
     - WebRTC-SDK
 
 EXTERNAL SOURCES:
-  device_info_plus:
-    :path: Flutter/ephemeral/.symlinks/plugins/device_info_plus/macos
   flutter_webrtc:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_webrtc/macos
   FlutterMacOS:
     :path: Flutter/ephemeral
   path_provider_foundation:
-    :path: Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin
+    :path: Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/macos
   shared_preferences_foundation:
-    :path: Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin
+    :path: Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/macos
   videosdk:
     :path: Flutter/ephemeral/.symlinks/plugins/videosdk/macos
 
 SPEC CHECKSUMS:
-  device_info_plus: ce1b7762849d3ec103d0e0517299f2db7ad60720
-  flutter_webrtc: a78d3c00e5796b23f196393d9e70901546f4d20d
+  flutter_webrtc: 0e2af3876ed28d4599c06734c771c2526309356b
   FlutterMacOS: 8f6f14fa908a6fb3fba0cd85dbd81ec4b251fb24
-  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
-  shared_preferences_foundation: fcdcbc04712aee1108ac7fda236f363274528f78
+  path_provider_foundation: c68054786f1b4f3343858c1e1d0caaded73f0be9
+  shared_preferences_foundation: 986fc17f3d3251412d18b0265f9c64113a8c2472
   videosdk: 412b9887b47af7669188cf310789dd1cc32cfd4f
-  WebRTC-SDK: 5319b8964f453c5ea6030d93c345082c4f40aa1c
+  WebRTC-SDK: 6469c304549f7187e7e67119c8b3184f9ec6b7f6
 
 PODFILE CHECKSUM: 353c8bcc5d5b0994e508d035b5431cfe18c1dea7
 
-COCOAPODS: 1.15.2
+COCOAPODS: 1.12.0

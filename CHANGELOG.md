@@ -1,12 +1,3 @@
-## v1.1.13
-
-**Release Date** : 17th July 2024
-
-**Change Log** :
-
-1. Added support for Custom Video Processors in iOS and Android.
-
-
 ## v1.1.12
 
 **Release Date** : 31st May 2024

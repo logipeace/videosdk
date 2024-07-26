@@ -1,6 +1,6 @@
 import 'dart:developer';
 
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:videosdk/src/core/room/open_telemetry/videosdk_log.dart';
 import 'package:videosdk/videosdk.dart';
 

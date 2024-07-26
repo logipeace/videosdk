@@ -1,11 +1,9 @@
 package live.videosdk.videosdk
-import live.videosdk.videosdk.VideoSDK;
-import android.net.Uri;
-import live.videosdk.webrtc.VideoProcessor;
+
 import androidx.annotation.NonNull
 import android.content.Context;
 
-import java.util.HashMap
+
 import java.util.HashSet;
 
 import java.io.BufferedReader
@@ -64,24 +62,6 @@ class VideosdkPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
             val memoryUsage = captureMemoryUsage()
             result.success(memoryUsage)
         }
-        else if (call.method == "processorMethod") {
-            val videoSDK = VideoSDK.getInstance()
-            val bgProcessorName: String? = call.argument("videoProcessorName")
-    
-            if (bgProcessorName != null) {
-                val videoProcessorMap: Map<String, VideoProcessor> = videoSDK.getRegisteredVideoProcessors()
-                val bgProcessor = videoProcessorMap[bgProcessorName]
-    
-                if (bgProcessor != null) {
-                    videoSDK.setVideoProcessor(bgProcessor)
-                    result.success("Processor has been set")
-                } else {
-                    result.error("Processor not found", "No processor found with the name $bgProcessorName", null)
-                }
-            } else {
-                videoSDK.setVideoProcessor(null)
-            }
-        }       
         else {
             result.notImplemented()
         }

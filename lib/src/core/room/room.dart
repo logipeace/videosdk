@@ -8,7 +8,7 @@ import 'package:events2/events2.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
 import 'package:videosdk/src/core/room/audio_html/audio_html_interface.dart';
 import 'package:videosdk/src/core/videosdk.dart';

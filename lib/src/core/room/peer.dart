@@ -1,4 +1,4 @@
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:videosdk/src/core/room/room_mode.dart';
 
 import '../../core/webrtc/webrtc_client.dart';

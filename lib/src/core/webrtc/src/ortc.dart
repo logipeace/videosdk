@@ -1,5 +1,5 @@
 import 'package:collection/collection.dart';
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'rtp_parameters.dart';
 import 'sctp_parameters.dart';
 import 'package:h264_profile_level_id/h264_profile_level_id.dart';

@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:videosdk/videosdk.dart';
-import 'package:videosdk_media_effects/videosdk_media_effects.dart';
 import '../widgets/screen_select_dialog.dart';
 import '/screens/chat_screen.dart';
 
@@ -16,7 +15,7 @@ import '../utils/toast.dart';
 import '../widgets/meeting_controls/meeting_action_bar.dart';
 import '../widgets/participant_grid_view/participant_grid_view.dart';
 import 'startup_screen.dart';
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 // Meeting Screen
 class MeetingScreen extends StatefulWidget {
@@ -79,8 +78,8 @@ class _MeetingScreenState extends State<MeetingScreen> {
   initMeeting() async {
     // //Creating Custom Video Track
     CustomTrack videoTrack = await VideoSDK.createCameraVideoTrack(
-      encoderConfig: CustomVideoTrackConfig.h360p_w480p,
-      multiStream: false,
+      encoderConfig: CustomVideoTrackConfig.h720p_w1280p,
+      multiStream: true,
     );
 
     //Creating Custom Audio Track
@@ -88,7 +87,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
         encoderConfig: CustomAudioTrackConfig.high_quality);
 
     Room room = VideoSDK.createRoom(
-      roomId: "oupf-fhti-93e9",
+      roomId: widget.meetingId,
       token: widget.token,
       displayName: widget.displayName,
       micEnabled: widget.micEnabled,
@@ -146,6 +145,8 @@ class _MeetingScreenState extends State<MeetingScreen> {
                             encoderConfig: CustomAudioTrackConfig.high_quality);
                     meeting.unmuteMic(audioTrack);
                   }
+
+                 
                 },
                 // Called when camera button is pressed
                 onCameraButtonPressed: () async {
@@ -168,7 +169,6 @@ class _MeetingScreenState extends State<MeetingScreen> {
                   MediaDeviceInfo deviceToSwitch = cameras.firstWhere(
                     (cam) => cam.deviceId != selectedCamId,
                   );
-
                   meeting.changeCam(deviceToSwitch.deviceId);
                 },
 
@@ -219,9 +219,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
                                               .getMics()
                                               .map(
                                                 (e) => ElevatedButton(
-                                                  child: Text(e.label +
-                                                      "  " +
-                                                      e.deviceId),
+                                                  child: Text(e.label + "  " + e.deviceId),
                                                   onPressed: () => {
                                                     meeting.changeMic(e),
                                                     Navigator.pop(context)
@@ -257,9 +255,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
                                               .getAudioOutputDevices()
                                               .map(
                                                 (e) => ElevatedButton(
-                                                  child: Text(e.label +
-                                                      " " +
-                                                      e.deviceId),
+                                                  child: Text(e.label + " " + e.deviceId),
                                                   onPressed: () => {
                                                     meeting
                                                         .switchAudioDevice(e),
@@ -276,7 +272,6 @@ class _MeetingScreenState extends State<MeetingScreen> {
                               );
                             },
                           ),
-
                           ElevatedButton(
                             child: const Text('CHANGE Video DEVICE'),
                             onPressed: () {
@@ -297,7 +292,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
                                               .map(
                                                 (e) => ElevatedButton(
                                                   child: Text(e.label),
-                                                  onPressed: () async => {
+                                                  onPressed: () => {
                                                     meeting
                                                         .changeCam(e.deviceId),
                                                     Navigator.pop(context)
@@ -412,37 +407,6 @@ class _MeetingScreenState extends State<MeetingScreen> {
                               Navigator.pop(context);
                             },
                           ),
-                          ElevatedButton(
-                            child: const Text('Apply Package Background'),
-                            onPressed: () {
-                              Uri backgroundImageUri = Uri.parse(
-                                  "https://st.depositphotos.com/2605379/52364/i/450/depositphotos_523648932-stock-photo-concrete-rooftop-night-city-view.jpg");
-                              VideosdkMediaEffects.applyVirtualBackground(
-                                  backgroundSource: backgroundImageUri);
-                              // VideoSDK.applyVideoProcessor(videoProcessorName: "VirtualBGProcessor");
-
-                              Navigator.pop(context);
-                            },
-                          ),
-                          ElevatedButton(
-                            child: const Text('Change Virtual Background'),
-                            onPressed: () {
-                              Uri backgroundImageUri = Uri.parse(
-                                  "https://wallpapers.com/images/featured/abstract-background-6m6cjbifu3zpfv84.jpg");
-                              VideosdkMediaEffects.changeVirtualBackground(
-                                  backgroundSource: backgroundImageUri);
-
-                              Navigator.pop(context);
-                            },
-                          ),
-                          ElevatedButton(
-                            child: const Text('Remove Virtual Background'),
-                            onPressed: () {
-                              // VideoSDK.removeVideoProcessor();
-                              VideosdkMediaEffects.removeVirtualBackground();
-                              Navigator.pop(context);
-                            },
-                          ),
 
                           ElevatedButton(
                             child: const Text('Low Resolution'),
@@ -476,16 +440,12 @@ class _MeetingScreenState extends State<MeetingScreen> {
                               Navigator.pop(context);
                             },
                           ),
-
-                          //check selected devices
+                           //check selected devices
                           ElevatedButton(
                             child: const Text('Selected devices'),
                             onPressed: () async {
-                              print("selected mic id" + meeting.selectedMicId!);
-                              print("selected Camera id" +
-                                  meeting.selectedCamId!);
-                              print(
-                                  "selected speaker ${meeting.selectedSpeakerId}");
+                              print("selected mic id"+ meeting.selectedMicId!);
+                              print("selected Camera id"+ meeting.selectedCamId!);
                               Navigator.pop(context);
                             },
                           ),

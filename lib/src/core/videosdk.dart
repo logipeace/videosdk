@@ -5,7 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:random_string/random_string.dart';
 import 'package:videosdk/src/core/room/custom_track_configs.dart';
 import 'package:videosdk/src/core/room/events.dart';
@@ -352,6 +352,18 @@ class VideoSDK {
         },
         appleAudioMode: AppleAudioMode.voiceChat));
   }
+
+  static void setAppleSpeakerAudioConfiguration() async {
+    await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
+        appleAudioCategory: AppleAudioCategory.playAndRecord,
+        appleAudioCategoryOptions: {
+          AppleAudioCategoryOption.defaultToSpeaker,
+          AppleAudioCategoryOption.allowBluetooth,
+          AppleAudioCategoryOption.allowBluetoothA2DP
+        },
+        appleAudioMode: AppleAudioMode.voiceChat));
+  }
+
 
   static Future<List<DeviceInfo>?> getDevices() async {
     bool _isFirefox = await isFirefox();
@@ -708,13 +720,6 @@ class VideoSDK {
       // optimizationMode: optimizationMode
     );
     return customVideoTrack;
-  }
-
-  static void applyVideoProcessor({required String videoProcessorName}) async{
-    await _channel.invokeMethod('processorMethod', {"videoProcessorName": videoProcessorName});
-  }
-  static void removeVideoProcessor() async{
-    await _channel.invokeMethod('processorMethod', {"videoProcessorName": null});
   }
 }
 

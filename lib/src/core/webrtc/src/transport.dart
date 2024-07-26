@@ -1,4 +1,4 @@
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:videosdk_room_stats/videosdk_room_stats.dart';
 
 import 'FlexQueue/flex_queue.dart';

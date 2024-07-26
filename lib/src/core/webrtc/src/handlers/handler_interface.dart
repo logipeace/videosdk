@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:videosdk_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:videosdk/src/core/webrtc/src/handlers/plan_b.dart';
 
 import '../common/enhanced_event_emitter.dart';
