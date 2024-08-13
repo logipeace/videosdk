@@ -1694,7 +1694,7 @@ class Room {
   }
 
   //
-  Future<void> join() async {
+  Future<void> join({Function()? participantMediaStateChanged}) async {
     if (_joined) {
       //
       log("Already Joined");
@@ -2798,6 +2798,12 @@ class Room {
         case 'transcriptionText':
           {
             _eventEmitter.emit("transcription-text", notification['data']);
+            break;
+          }
+
+        case 'participantMediaStateChanged':
+          {
+            participantMediaStateChanged?.call();
             break;
           }
 
