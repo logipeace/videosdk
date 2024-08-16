@@ -108,7 +108,7 @@ class VideoSDK {
             if (!kIsWeb) {
               if (Platform.isIOS) {
                 // set videoChat mode whenever new device connected
-                setAppleAudioConfiguration();
+                // setAppleAudioConfiguration();
               }
             }
           })
@@ -284,7 +284,7 @@ class VideoSDK {
     if (!kIsWeb) {
       if (Platform.isIOS) {
         // setting AppleAudioConfiguration to get bluetooth device in the list
-        setAppleAudioConfiguration();
+        // setAppleAudioConfiguration();
       }
     }
     if (!_isFirefox && kIsWeb) {
@@ -352,18 +352,6 @@ class VideoSDK {
         },
         appleAudioMode: AppleAudioMode.voiceChat));
   }
-
-  static void setAppleSpeakerAudioConfiguration() async {
-    await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
-        appleAudioCategory: AppleAudioCategory.playAndRecord,
-        appleAudioCategoryOptions: {
-          AppleAudioCategoryOption.defaultToSpeaker,
-          AppleAudioCategoryOption.allowBluetooth,
-          AppleAudioCategoryOption.allowBluetoothA2DP
-        },
-        appleAudioMode: AppleAudioMode.voiceChat));
-  }
-
 
   static Future<List<DeviceInfo>?> getDevices() async {
     bool _isFirefox = await isFirefox();
