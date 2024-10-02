@@ -53,6 +53,17 @@ enum Events {
   error,
 
   deviceChanged,
+
+  //Character Events 
+  characterJoined,
+  characterLeft,
+  characterMessage,
+  characterStateChanged,
+  
+  //Whiteboard events
+  whiteboardStarted,
+  whiteboardStopped
+  
 }
 
 Map<Events, String> eventsMap = {
@@ -86,6 +97,12 @@ Map<Events, String> eventsMap = {
   Events.transcriptionText: 'transcription-text',
   Events.error: 'error',
   Events.deviceChanged: 'device-changed',
+  Events.characterJoined: 'character-joined',
+  Events.characterLeft: 'character-left',
+  Events.characterMessage: 'character-message',
+  Events.characterStateChanged: 'character-state-changed',
+  Events.whiteboardStarted: 'whiteboard-started',
+  Events.whiteboardStopped: 'whiteboard-stopped'
 };
 
 extension ParseToString on Events {

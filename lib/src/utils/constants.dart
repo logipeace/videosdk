@@ -1,4 +1,4 @@
-const sdkVersion = "1.1.12";
+const sdkVersion = "1.2.2";
 
 const VIDEO_LAYERS = {
   "sd": {

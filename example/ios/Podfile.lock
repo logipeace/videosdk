@@ -1,38 +1,49 @@
 PODS:
   - camera_avfoundation (0.0.1):
     - Flutter
+  - device_info_plus (0.0.1):
+    - Flutter
   - Flutter (1.0.0)
   - flutter_foreground_task (0.0.1):
     - Flutter
-  - flutter_webrtc (0.9.20):
-    - Flutter
-    - WebRTC-SDK (= 104.5112.09)
   - fluttertoast (0.0.2):
     - Flutter
     - Toast
   - path_provider_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
+  - permission_handler_apple (9.3.0):
+    - Flutter
   - shared_preferences_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - Toast (4.0.0)
+  - Toast (4.1.1)
   - touch_ripple_effect (0.0.1):
     - Flutter
   - videosdk (0.0.1):
     - Flutter
-  - WebRTC-SDK (104.5112.09)
+    - videosdk_webrtc
+  - videosdk_media_effects (0.0.1):
+    - Flutter
+    - videosdk_webrtc
+  - videosdk_webrtc (0.10.3):
+    - Flutter
+    - WebRTC-SDK (= 114.5735.09)
+  - WebRTC-SDK (114.5735.09)
 
 DEPENDENCIES:
   - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
+  - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
   - Flutter (from `Flutter`)
   - flutter_foreground_task (from `.symlinks/plugins/flutter_foreground_task/ios`)
-  - flutter_webrtc (from `.symlinks/plugins/flutter_webrtc/ios`)
   - fluttertoast (from `.symlinks/plugins/fluttertoast/ios`)
-  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/ios`)
-  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/ios`)
+  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
+  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
   - touch_ripple_effect (from `.symlinks/plugins/touch_ripple_effect/ios`)
   - videosdk (from `.symlinks/plugins/videosdk/ios`)
+  - videosdk_media_effects (from `.symlinks/plugins/videosdk_media_effects/ios`)
+  - videosdk_webrtc (from `.symlinks/plugins/videosdk_webrtc/ios`)
 
 SPEC REPOS:
   trunk:
@@ -42,36 +53,45 @@ SPEC REPOS:
 EXTERNAL SOURCES:
   camera_avfoundation:
     :path: ".symlinks/plugins/camera_avfoundation/ios"
+  device_info_plus:
+    :path: ".symlinks/plugins/device_info_plus/ios"
   Flutter:
     :path: Flutter
   flutter_foreground_task:
     :path: ".symlinks/plugins/flutter_foreground_task/ios"
-  flutter_webrtc:
-    :path: ".symlinks/plugins/flutter_webrtc/ios"
   fluttertoast:
     :path: ".symlinks/plugins/fluttertoast/ios"
   path_provider_foundation:
-    :path: ".symlinks/plugins/path_provider_foundation/ios"
+    :path: ".symlinks/plugins/path_provider_foundation/darwin"
+  permission_handler_apple:
+    :path: ".symlinks/plugins/permission_handler_apple/ios"
   shared_preferences_foundation:
-    :path: ".symlinks/plugins/shared_preferences_foundation/ios"
+    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
   touch_ripple_effect:
     :path: ".symlinks/plugins/touch_ripple_effect/ios"
   videosdk:
     :path: ".symlinks/plugins/videosdk/ios"
+  videosdk_media_effects:
+    :path: ".symlinks/plugins/videosdk_media_effects/ios"
+  videosdk_webrtc:
+    :path: ".symlinks/plugins/videosdk_webrtc/ios"
 
 SPEC CHECKSUMS:
-  camera_avfoundation: 3125e8cd1a4387f6f31c6c63abb8a55892a9eeeb
-  Flutter: f04841e97a9d0b0a8025694d0796dd46242b2854
+  camera_avfoundation: dd002b0330f4981e1bbcb46ae9b62829237459a4
+  device_info_plus: 97af1d7e84681a90d0693e63169a5d50e0839a0d
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
   flutter_foreground_task: 21ef182ab0a29a3005cc72cd70e5f45cb7f7f817
-  flutter_webrtc: 15c5fb4ea324f3178ff97c0f02b9467b85977e42
-  fluttertoast: eb263d302cc92e04176c053d2385237e9f43fad0
-  path_provider_foundation: c68054786f1b4f3343858c1e1d0caaded73f0be9
-  shared_preferences_foundation: 986fc17f3d3251412d18b0265f9c64113a8c2472
-  Toast: 91b396c56ee72a5790816f40d3a94dd357abc196
+  fluttertoast: e9a18c7be5413da53898f660530c56f35edfba9c
+  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
+  permission_handler_apple: 9878588469a2b0d0fc1e048d9f43605f92e6cec2
+  shared_preferences_foundation: fcdcbc04712aee1108ac7fda236f363274528f78
+  Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   touch_ripple_effect: 5b850cbec069237959ef95e7e81e7ee7f934ac76
-  videosdk: a23c2981afcefd8ac781c7778d39669282441093
-  WebRTC-SDK: 3fa5c6fa717314fade68bffed85737484a28ad0b
+  videosdk: 1c91ee1eb4cbf2ffccd5740ee75cfe7b656b6143
+  videosdk_media_effects: 69e757ab14e93eef94d1ce5aea9cd47349af3d6c
+  videosdk_webrtc: 99da4edb27a4abd88a7e88b9be78398f0b4d91ec
+  WebRTC-SDK: efc3e67e0355b1ee14bfe3c91188cada6000cb94
 
-PODFILE CHECKSUM: 3dc5f977e7387d69d133563136ad5fb1231b0214
+PODFILE CHECKSUM: fe12e342ff456e276c26d596fd7f99d452ba9688
 
-COCOAPODS: 1.12.0
+COCOAPODS: 1.15.2

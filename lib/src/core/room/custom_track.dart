@@ -1,6 +1,6 @@
 import 'dart:developer';
 
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:videosdk_webrtc/flutter_webrtc.dart';
 import 'package:videosdk/src/core/room/open_telemetry/videosdk_log.dart';
 import 'package:videosdk/videosdk.dart';
 
@@ -13,6 +13,8 @@ class CustomTrack {
   late Map<String, bool>? noiseConfig;
   late CustomTrackKind kind;
   late bool multiStream;
+  bool ended = false;
+  String? microphoneId;
   // late String optimizationMode;
 
   CustomTrack.videoTrack({
@@ -28,6 +30,7 @@ class CustomTrack {
     this.audioEncoderConfig = CustomAudioTrackConfig.speech_standard,
     this.noiseConfig,
     this.kind = CustomTrackKind.AUDIO,
+    this.microphoneId
   });
 
   dispose() async {
@@ -36,6 +39,7 @@ class CustomTrack {
         track.onEnded = null;
         track.stop();
       });
+      ended = true;
     } catch (error) {
       //
       VideoSDKLog.createLog(

@@ -28,6 +28,11 @@ class _ParticipantGridViewState extends State<ParticipantGridView> {
     localParticipant = widget.meeting.localParticipant;
     participants = widget.meeting.participants;
     pinnedParticipants = widget.meeting.pinnedParticipants;
+    if(widget.meeting.characters!= null){
+      for(Character character in widget.meeting.characters!.values){
+        participants[character.id] = character;
+      }
+    }
 
     // Setting meeting event listeners
     setMeetingListeners(widget.meeting);
@@ -88,6 +93,23 @@ class _ParticipantGridViewState extends State<ParticipantGridView> {
         });
       },
     );
+
+    _meeting.on(Events.characterJoined, (Character character ) {
+      final newParticipants = participants;
+        newParticipants[character.id] = character;
+        setState(() {
+          participants = newParticipants;
+        });
+    });
+
+    _meeting.on(Events.characterLeft, (Character character ) {
+      final newParticipants = participants;
+
+        newParticipants.remove(character.id);
+        setState(() {
+          participants = newParticipants;
+        });
+    });
 
     // Called when speaker is changed
     _meeting.on(Events.speakerChanged, (_activeSpeakerId) {

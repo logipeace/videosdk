@@ -159,31 +159,144 @@ Map<int, Map<String, String>> VideoSDKErrors = {
   },
 
   //sdkError
+  3001: {
+    "code": "3001",
+    "name": "ERROR_CUSTOM_VIDEO_TRACK_DISPOSED",
+    "message":
+        "The provided custom video track has been disposed of, and is now in an ended state. Reverting to the default video track."
+  },
+  3002: {
+    "code": "3002",
+    "name": "ERROR_CUSTOM_AUDIO_TRACK_DISPOSED",
+    "message":
+        "The provided custom audio track has been disposed of, and is now in an ended state. Reverting to the default audio track."
+  },
+  3003: {
+    "code": "3003",
+    "name": "ERROR_CAMERA_IN_USE",
+    "message":
+        "The camera is being used by another application. Please close any programs utilizing the camera, such as video conferencing tools, screen recording software, or other browsers. Restart your browser and attempt again.",
+  },
+  3004: {
+    "code": "3004",
+    "name": "ERROR_MICROPHONE_IN_USE",
+    "message":
+        "The microphone is being used by another application. Please close any programs utilizing the microphone, such as video conferencing tools, screen recording software, or other browsers. Restart your browser and attempt again.",
+  },
+  3005: {
+    "code": "3005",
+    "name": "ERROR_CAMERA_ACCESS_UNAVAILABLE",
+    "message":
+        "Camera access unavailable: Please ensure your device is compatible and that you're on a secure website (https://).",
+  },
+  3006: {
+    "code": "3006",
+    "name": "ERROR_MICROPHONE_ACCESS_UNAVAILABLE",
+    "message":
+        "Microphone access unavailable: Please ensure your device is compatible and that you're on a secure website (https://).",
+  },
+  3007: {
+    "code": "3007",
+    "name": "ERROR_CAMERA_ACCESS_DENIED_OR_DISMISSED",
+    "message":
+        "Camera access was denied or dismissed. To proceed, kindly grant access manually through your device/browser settings.",
+  },
+  3008: {
+    "code": "3008",
+    "name": "ERROR_MICROPHONE_ACCESS_DENIED_OR_DISMISSED",
+    "message":
+        "Microphone access was denied or dismissed. To proceed, kindly grant access through your device/browser settings.",
+  },
+  3009: {
+    "code": "3009",
+    "name": "ERROR_CAMERA_PERMISSION_DENIED_BY_OS",
+    "message":
+        "Camera permission denied by OS system settings. Please check the system settings and grant permission for this browser.",
+  },
+  3010: {
+    "code": "3010",
+    "name": "ERROR_MICROPHONE_PERMISSION_DENIED_BY_OS",
+    "message":
+        "Microphone permission denied by OS system settings. Please check the system settings and grant permission for this browser.",
+  },
   3011: {
     "code": "3011",
     "name": "ERROR_STARTING_VIDEO",
-    "message": "Some error occurred during starting the video",
+    "message":
+        "Something went wrong, and the webCam could not be enabled. Please try again.",
   },
 
   3012: {
     "code": "3012",
     "name": "ERROR_STARTING_AUDIO",
-    "message": "Some error occurred during starting the audio",
+    "message":
+        "Something went wrong, and the microphone could not be enabled. Please try again.",
   },
 
   3013: {
     "code": "3013",
     "name": "ERROR_STARTING_SCREENSHARE",
-    "message": "Some error occurred during starting the screen share",
+    "message":
+        "Something went wrong, and the screenshare could not be enabled. Please try again.",
   },
   3014: {
     "code": "3014",
-    "name": "ERROR_GET_DISPLAY_MEDIA_PERMISSION_DENIED",
-    "message": "Screen sharing permission denied",
+    "name": "ERROR_SCREENSHARE_PERMISSION_DENIED",
+    "message":
+        "Screen sharing permission was denied. To enable screen sharing, please try again and grant the necessary permissions.",
   },
   3015: {
     "code": "3015",
-    "name": "ERROR_GET_DISPLAY_MEDIA_NOT_SUPPORTED",
-    "message": "Screen share feature not supported",
+    "name": "ERROR_SCREENSHARE_NOT_SUPPORTED",
+    "message":
+        "Screenshare not supported: Unable to generate a screenshare stream. Please ensure your device/browser is compatible.",
+  },
+  3016: {
+    "code": "3016",
+    "name": "ERROR_STARTING_FOREGROUND_SERVICE",
+    "message":
+        "An error occurred while initializing the foreground service, preventing screenshare from being enabled. Please try again."
+  },
+  3017: {
+    "code": "3017",
+    "name": "ERROR_CREATING_VIDEO_TRACK",
+    "message":
+        "An error occurred while creating the video track. Please try again.",
+  },
+  3018: {
+    "code": "3018",
+    "name": "ERROR_CREATING_AUDIO_TRACK",
+    "message":
+        "An error occurred while creating the audio track. Please try again.",
+  },
+  3019: {
+    "code": "3019",
+    "name": "ERROR_CAMERA_DEVICE_INCOMPATIBLE",
+    "message":
+        "Camera device cannot produce video: Unable to produce video stream. Please ensure your device is compatible."
+  },
+  3020: {
+    "code": "3020",
+    "name": "ERROR_MICROPHONE_DEVICE_INCOMPATIBLE",
+    "message":
+        "Microphone device cannot produce audio: Unable to produce audio stream. Please ensure your device is compatible."
+  },
+  3021: {
+    "code": "3021",
+    "name": "ERROR_CHANGING_MODE",
+    "message":
+        "Something went wrong, and the mode could not be changed. Please try again.",
+  },
+  3022: {
+    "code": "3022",
+    "name": "ERROR_ACTION_PERFORMED_BEFORE_MEETING_JOINED",
+    "message":
+        "Something went wrong. The room was in a connecting state, and during that time, an action encountered an issue. Please try again after joining a meeting.",
+  },
+  3023: {
+    "code": "3023",
+    "name": "ERROR_JOINING_MEETING",
+    "message":
+        "Something went wrong. The meeting could not be joined. Please try again.",
   },
 };

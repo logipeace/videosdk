@@ -1,4 +1,4 @@
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:videosdk_webrtc/flutter_webrtc.dart';
 import '../src/common/index.dart';
 
 /// The RTP capabilities define what mediasoup or an endpoint can receive at

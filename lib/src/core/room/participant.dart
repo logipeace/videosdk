@@ -186,6 +186,9 @@ class Participant {
   on(Events event, handler) {
     _participantEventEmitter.on(event.parseToString(), handler);
   }
+  off(Events event, Function handler) {
+    _participantEventEmitter.remove(event.parseToString(), handler);
+  }
 
   _setLayers(int? spatialLayer, int? temporalLayer, String prevQuality,
       String currentQuality) {
@@ -247,6 +250,7 @@ class Participant {
       "stream-enabled",
       stream,
     );
+    _eventEmitter.emit("stream-enabled-character-$id", stream);
   }
 
   _removeConsumer(String consumerId) {
@@ -259,6 +263,7 @@ class Participant {
         "stream-disabled",
         streamToRemove,
       );
+      _eventEmitter.emit("stream-disabled-character-$id", streamToRemove);
     }
   }
 
