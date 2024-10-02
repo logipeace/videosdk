@@ -1,15 +1,20 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:videosdk/src/utils/constants.dart';
 
 class VideoSDKLog {
   static String? meetingId;
+  static String? sessionId;
   static String? peerId;
   static var logsConfig;
   static String? jwtKey;
+  static Map<String, dynamic>? deviceInfo;
+  static bool? debugMode;
+
 
   static createLog(
-      {required String message, required String logLevel, Map? attributes}) {
+      {required String message, required String logLevel, Map? attributes, bool? dashboardLog }) {
     try {
       if (meetingId == null ||
           peerId == null ||
@@ -25,15 +30,21 @@ class VideoSDKLog {
             },
             body: json.encode({
               "logText": message,
-              "logLevel": logLevel,
+              "logType": logLevel,
               "attributes": {
                 "SDK": "flutter",
+                "SDK_VERSION" : sdkVersion,
                 "roomId": meetingId,
-                "customerId": peerId,  
+                "peerId": peerId,  
+                "sessionId" : sessionId,
+                ...?deviceInfo,
                 ...?attributes,
-              }
+              },
+              "dashboardLog" : dashboardLog,
+              "debugMode" : debugMode
             }));
       }
-    } catch (error) {}
+    } catch (error) {
+    }
   }
 }

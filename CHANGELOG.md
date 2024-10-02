@@ -1,3 +1,63 @@
+
+## v1.2.2
+
+**Release Date** : 23rd September 2024
+
+**Change Log** :
+
+1. Provided methods and events for Whiteboard Management.
+
+
+## v1.2.1
+
+**Release Date** : 13th August 2024
+
+**Change Log** :
+
+1. Added support for CharacterSDK.
+
+
+## v1.2.0+1
+
+**Release Date** : 8th August 2024
+
+**Change Log** :
+
+1. Removed support for facingMode in desktop based applications.
+
+2. Changed value of facingMode enum from `front` to `user`.
+
+
+## v1.2.0
+
+**Release Date** : 7th August 2024
+
+**Change Log** :
+
+1. Removed methods `getMics`, `getCameras` and `getAudioOutputDevices` of the `Room` class.
+
+2. Changed return type of `createMicrophoneAudioTrack()` and `createCameraVideoTrack()` methods from CustomTrack to CustomTrack?.
+
+3. Changed parameter type of `changeMic()`, `changeCam()` and `switchAudioDevice()` methods.
+
+4. Improved error handling and emitting more precise errors on the event.
+
+5. Changed type of post transcription config parameter in `startRecording()`, `startHls()` and `startLivesStream()` methods.
+
+6. Changed type of transcription config parameter in `startTranscription()` method.
+
+7. Provided debugMode parameter in `createRoom()` method for enabling users to view detailed error logs directly on the VideoSDK's dashboard and changed parameter type of facingMode.
+
+
+## v1.1.13
+
+**Release Date** : 17th July 2024
+
+**Change Log** :
+
+1. Added support for Custom Video Processors in iOS and Android.
+
+
 ## v1.1.12
 
 **Release Date** : 31st May 2024

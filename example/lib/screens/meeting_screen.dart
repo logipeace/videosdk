@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:videosdk/videosdk.dart';
+import 'package:videosdk_media_effects/videosdk_media_effects.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import '../widgets/screen_select_dialog.dart';
 import '/screens/chat_screen.dart';
 
@@ -15,7 +17,7 @@ import '../utils/toast.dart';
 import '../widgets/meeting_controls/meeting_action_bar.dart';
 import '../widgets/participant_grid_view/participant_grid_view.dart';
 import 'startup_screen.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:videosdk_webrtc/flutter_webrtc.dart';
 
 // Meeting Screen
 class MeetingScreen extends StatefulWidget {
@@ -48,10 +50,15 @@ class _MeetingScreenState extends State<MeetingScreen> {
   bool isLiveStreamOn = false;
   bool isHlsOn = false;
 
+  bool isWhiteboardOn = false;
+  late WebViewController controller;
+
   // List of controls
-  List<MediaDeviceInfo> cameras = [];
-  List<MediaDeviceInfo> mics = [];
+  List<VideoDeviceInfo>? cameras = [];
+  List<AudioDeviceInfo>? mics = [];
+  List<AudioDeviceInfo>? speakers = [];
   String? selectedMicId;
+  Character? character;
 
   String? activePresenterId;
 
@@ -77,17 +84,24 @@ class _MeetingScreenState extends State<MeetingScreen> {
 
   initMeeting() async {
     // //Creating Custom Video Track
-    CustomTrack videoTrack = await VideoSDK.createCameraVideoTrack(
-      encoderConfig: CustomVideoTrackConfig.h720p_w1280p,
-      multiStream: true,
+
+    VideoSDK.on(Events.error, (error) {
+      print(
+          "VIDEOSDK ERROR :: ${error['code']}  :: ${error['name']} :: ${error['message']}");
+    });
+
+    CustomTrack? videoTrack = await VideoSDK.createCameraVideoTrack(
+      encoderConfig: CustomVideoTrackConfig.h360p_w480p,
+      multiStream: false,
     );
 
     //Creating Custom Audio Track
-    CustomTrack audioTrack = await VideoSDK.createMicrophoneAudioTrack(
-        encoderConfig: CustomAudioTrackConfig.high_quality);
+    CustomTrack? audioTrack = await VideoSDK.createMicrophoneAudioTrack(
+      encoderConfig: CustomAudioTrackConfig.high_quality,
+    );
 
     Room room = VideoSDK.createRoom(
-      roomId: widget.meetingId,
+      roomId: "oupf-fhti-93e9",
       token: widget.token,
       displayName: widget.displayName,
       micEnabled: widget.micEnabled,
@@ -140,13 +154,11 @@ class _MeetingScreenState extends State<MeetingScreen> {
                     meeting.muteMic();
                   } else {
                     //Create Custom Audio track
-                    CustomTrack audioTrack =
-                        await VideoSDK.createMicrophoneAudioTrack(
-                            encoderConfig: CustomAudioTrackConfig.high_quality);
-                    meeting.unmuteMic(audioTrack);
+                    // CustomTrack? audioTrack =
+                    //     await VideoSDK.createMicrophoneAudioTrack(
+                    //         encoderConfig: CustomAudioTrackConfig.high_quality);
+                    meeting.unmuteMic();
                   }
-
-                 
                 },
                 // Called when camera button is pressed
                 onCameraButtonPressed: () async {
@@ -154,8 +166,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
                     meeting.disableCam();
                   } else {
                     //Create Custom Video track
-                    CustomTrack track = await VideoSDK.createCameraVideoTrack(
-                      facingMode: "environment",
+                    CustomTrack? track = await VideoSDK.createCameraVideoTrack(
                       encoderConfig: CustomVideoTrackConfig.h720p_w960p,
                       multiStream: false,
                     );
@@ -166,10 +177,11 @@ class _MeetingScreenState extends State<MeetingScreen> {
                 onSwitchCameraButtonPressed: () async {
                   final selectedCamId = meeting.selectedCamId;
 
-                  MediaDeviceInfo deviceToSwitch = cameras.firstWhere(
+                  VideoDeviceInfo deviceToSwitch = cameras!.firstWhere(
                     (cam) => cam.deviceId != selectedCamId,
                   );
-                  meeting.changeCam(deviceToSwitch.deviceId);
+
+                  meeting.changeCam(deviceToSwitch);
                 },
 
                 // Called when ScreenShare button is pressed
@@ -195,261 +207,362 @@ class _MeetingScreenState extends State<MeetingScreen> {
                     context: navigatorKey.currentContext!,
                     builder: (BuildContext context) => AlertDialog(
                       title: const Text("More options"),
-                      content: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          ElevatedButton(
-                            child: const Text('CHANGE INPUT AUDIO DEVICE'),
-                            onPressed: () {
-                              Navigator.pop(context);
-                              showDialog(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title:
-                                      const Text("Select input Audio Device"),
-                                  content: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: <Widget>[
-                                      SingleChildScrollView(
-                                        reverse: true,
-                                        child: Column(
-                                          children: meeting
-                                              .getMics()
-                                              .map(
-                                                (e) => ElevatedButton(
-                                                  child: Text(e.label + "  " + e.deviceId),
-                                                  onPressed: () => {
-                                                    meeting.changeMic(e),
-                                                    Navigator.pop(context)
-                                                  },
-                                                ),
-                                              )
-                                              .toList(),
-                                        ),
-                                      )
-                                    ],
+                      content: SingleChildScrollView(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            ElevatedButton(
+                              child: const Text('CHANGE INPUT AUDIO DEVICE'),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                showDialog(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title:
+                                        const Text("Select input Audio Device"),
+                                    content: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: <Widget>[
+                                        SingleChildScrollView(
+                                          reverse: true,
+                                          child: Column(
+                                            children: mics!
+                                                .map(
+                                                  (e) => ElevatedButton(
+                                                    child: Text(e.label +
+                                                        "  " +
+                                                        e.deviceId),
+                                                    onPressed: () => {
+                                                      meeting.changeMic(e),
+                                                      Navigator.pop(context)
+                                                    },
+                                                  ),
+                                                )
+                                                .toList(),
+                                          ),
+                                        )
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
-                          ElevatedButton(
-                            child: const Text('CHANGE OUTPUT AUDIO DEVICE'),
-                            onPressed: () {
-                              Navigator.pop(context);
-                              showDialog(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title:
-                                      const Text("Select output Audio Device"),
-                                  content: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: <Widget>[
-                                      SingleChildScrollView(
-                                        reverse: true,
-                                        child: Column(
-                                          children: meeting
-                                              .getAudioOutputDevices()
-                                              .map(
-                                                (e) => ElevatedButton(
-                                                  child: Text(e.label + " " + e.deviceId),
-                                                  onPressed: () => {
-                                                    meeting
-                                                        .switchAudioDevice(e),
-                                                    Navigator.pop(context)
-                                                  },
-                                                ),
-                                              )
-                                              .toList(),
-                                        ),
-                                      )
-                                    ],
+                                );
+                              },
+                            ),
+                            ElevatedButton(
+                              child: const Text('CHANGE OUTPUT AUDIO DEVICE'),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                showDialog(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: const Text(
+                                        "Select output Audio Device"),
+                                    content: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: <Widget>[
+                                        SingleChildScrollView(
+                                          reverse: true,
+                                          child: Column(
+                                            children: speakers!
+                                                .map(
+                                                  (e) => ElevatedButton(
+                                                    child: Text(e.label +
+                                                        " " +
+                                                        e.deviceId),
+                                                    onPressed: () => {
+                                                      meeting
+                                                          .switchAudioDevice(e),
+                                                      Navigator.pop(context)
+                                                    },
+                                                  ),
+                                                )
+                                                .toList(),
+                                          ),
+                                        )
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
-                          ElevatedButton(
-                            child: const Text('CHANGE Video DEVICE'),
-                            onPressed: () {
-                              Navigator.pop(context);
-                              showDialog(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text("Select Video Device"),
-                                  content: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: <Widget>[
-                                      SingleChildScrollView(
-                                        reverse: true,
-                                        child: Column(
-                                          children: meeting
-                                              .getCameras()
-                                              .map(
-                                                (e) => ElevatedButton(
-                                                  child: Text(e.label),
-                                                  onPressed: () => {
-                                                    meeting
-                                                        .changeCam(e.deviceId),
-                                                    Navigator.pop(context)
-                                                  },
-                                                ),
-                                              )
-                                              .toList(),
-                                        ),
-                                      )
-                                    ],
+                                );
+                              },
+                            ),
+                        
+                            ElevatedButton(
+                              child: const Text('CHANGE Video DEVICE'),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                showDialog(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: const Text("Select Video Device"),
+                                    content: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: <Widget>[
+                                        SingleChildScrollView(
+                                          reverse: true,
+                                          child: Column(
+                                            children: cameras!
+                                                .map(
+                                                  (e) => ElevatedButton(
+                                                    child: Text(e.label),
+                                                    onPressed: () async => {
+                                                      meeting.changeCam(e),
+                                                      Navigator.pop(context)
+                                                    },
+                                                  ),
+                                                )
+                                                .toList(),
+                                          ),
+                                        )
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
-                          //Change Mode
-                          ElevatedButton(
-                            child: const Text('Change Mode'),
-                            onPressed: () async {
-                              if (meeting.localParticipant.mode ==
-                                  Mode.CONFERENCE) {
-                                meeting.changeMode(Mode.VIEWER);
-                              } else if (meeting.localParticipant.mode ==
-                                  Mode.VIEWER) {
-                                meeting.changeMode(Mode.CONFERENCE);
-                              }
-                              Navigator.pop(context);
-                            },
-                          ),
-                          // Chat
-                          ElevatedButton(
-                            child: const Text('Chat'),
-                            onPressed: () {
-                              Navigator.pop(context);
-                              showModalBottomSheet(
-                                context: context,
-                                constraints: BoxConstraints(
-                                    maxHeight:
-                                        MediaQuery.of(context).size.height -
-                                            statusbarHeight),
-                                isScrollControlled: true,
-                                builder: (context) =>
-                                    ChatScreen(meeting: meeting),
-                              );
-                            },
-                          ),
-
-                          // Recording button
-                          ElevatedButton(
-                            child: Text(
-                              isRecordingOn
-                                  ? 'Stop Recording'
-                                  : 'Start Recording',
+                                );
+                              },
                             ),
-                            onPressed: () {
-                              if (isRecordingOn) {
-                                meeting.stopRecording();
-                              } else {
-                                meeting.startRecording();
-                              }
+                            ElevatedButton(
+                              child: const Text('Add Character'),
+                              onPressed: () {
+                                CharacterConfig characterConfig =
+                                    CharacterConfig.newInteraction(
+                                        characterId: "shivani-v1",
+                                        displayName: "MyCharacter",
+                                        characterMode: CharacterMode.AUTO_PILOT,
+                                        metaData: {"abcd": "xyz"});
+                                character = meeting.createCharacter(
+                                    characterConfig: characterConfig);
+                                registerCharacterEvents(character!);
+                                character?.join();
 
-                              Navigator.pop(context);
-                            },
-                          ),
-
-                          // Recording button
-                          ElevatedButton(
-                            child: Text(
-                              isHlsOn ? 'Stop HLS' : 'Start HLS',
+                                Navigator.pop(context);
+                              },
                             ),
-                            onPressed: () {
-                              if (isHlsOn) {
-                                meeting.stopHls();
-                              } else {
-                                meeting.startHls(config: {
-                                  'layout': {
-                                    'type': 'GRID',
-                                    'priority': 'SPEAKER',
-                                    'gridSize': 4,
-                                  },
-                                  'theme': "LIGHT",
-                                  "mode": "video-and-audio"
-                                });
-                              }
+                            ElevatedButton(
+                              child: const Text('Send Message to Character'),
+                              onPressed: () {
+                                character?.sendMessage(message: "Hey there");
 
-                              Navigator.pop(context);
-                            },
-                          ),
-
-                          // LiveStream button
-                          ElevatedButton(
-                            child: Text(
-                              isLiveStreamOn
-                                  ? 'Stop Livestream'
-                                  : 'Start Livestream',
+                                Navigator.pop(context);
+                              },
                             ),
-                            onPressed: () {
-                              List liveStreamOptions = [];
+                            ElevatedButton(
+                              child: const Text('Leave Character'),
+                              onPressed: () {
+                                character?.leave();
 
-                              if (isLiveStreamOn) {
-                                meeting.stopLivestream();
-                              } else {
-                                if (liveStreamOptions.isNotEmpty) {
-                                  meeting.startLivestream(liveStreamOptions);
-                                } else {
-                                  toastMsg(
-                                    "Failed to start livestream. Please add live stream options.",
-                                  );
+                                Navigator.pop(context);
+                              },
+                            ),
+                            ElevatedButton(
+                              child: const Text('Interrupt Character'),
+                              onPressed: () {
+                                character?.interrupt();
+
+                                Navigator.pop(context);
+                              },
+                            ),
+
+                            //Change Mode
+                            ElevatedButton(
+                              child: const Text('Change Mode'),
+                              onPressed: () async {
+                                if (meeting.localParticipant.mode ==
+                                    Mode.CONFERENCE) {
+                                  meeting.changeMode(Mode.VIEWER);
+                                } else if (meeting.localParticipant.mode ==
+                                    Mode.VIEWER) {
+                                  meeting.changeMode(Mode.CONFERENCE);
                                 }
-                              }
+                                Navigator.pop(context);
+                              },
+                            ),
+                            // Chat
+                            ElevatedButton(
+                              child: const Text('Chat'),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                showModalBottomSheet(
+                                  context: context,
+                                  constraints: BoxConstraints(
+                                      maxHeight:
+                                          MediaQuery.of(context).size.height -
+                                              statusbarHeight),
+                                  isScrollControlled: true,
+                                  builder: (context) =>
+                                      ChatScreen(meeting: meeting),
+                                );
+                              },
+                            ),
 
-                              Navigator.pop(context);
-                            },
-                          ),
+                            // Recording button
+                            ElevatedButton(
+                              child: Text(
+                                isRecordingOn
+                                    ? 'Stop Recording'
+                                    : 'Start Recording',
+                              ),
+                              onPressed: () {
+                                if (isRecordingOn) {
+                                  meeting.stopRecording();
+                                } else {
+                                  meeting.startRecording();
+                                }
 
-                          ElevatedButton(
-                            child: const Text('Low Resolution'),
-                            onPressed: () {
-                              meeting.participants.forEach((key, value) {
-                                value.setQuality('low');
-                              });
+                                Navigator.pop(context);
+                              },
+                            ),
 
-                              Navigator.pop(context);
-                            },
-                          ),
+                            ElevatedButton(
+                              child: Text(
+                                isWhiteboardOn
+                                    ? 'Stop Whiteboard'
+                                    : 'Start Whiteboard',
+                              ),
+                              onPressed: () {
+                                if (isWhiteboardOn) {
+                                  meeting.stopWhiteboard();
+                                } else {
+                                  meeting.startWhiteboard();
+                                }
 
-                          ElevatedButton(
-                            child: const Text('Med Resolution'),
-                            onPressed: () {
-                              meeting.participants.forEach((key, value) {
-                                value.setQuality('med');
-                              });
+                                Navigator.pop(context);
+                              },
+                            ),
 
-                              Navigator.pop(context);
-                            },
-                          ),
+                            // Recording button
+                            ElevatedButton(
+                              child: Text(
+                                isHlsOn ? 'Stop HLS' : 'Start HLS',
+                              ),
+                              onPressed: () {
+                                if (isHlsOn) {
+                                  meeting.stopHls();
+                                } else {
+                                  meeting.startHls(config: {
+                                    'layout': {
+                                      'type': 'GRID',
+                                      'priority': 'SPEAKER',
+                                      'gridSize': 4,
+                                    },
+                                    'theme': "LIGHT",
+                                    "mode": "video-and-audio"
+                                  });
+                                }
 
-                          ElevatedButton(
-                            child: const Text('High Resolution'),
-                            onPressed: () {
-                              meeting.participants.forEach((key, value) {
-                                value.setQuality('high');
-                              });
+                                Navigator.pop(context);
+                              },
+                            ),
 
-                              Navigator.pop(context);
-                            },
-                          ),
-                           //check selected devices
-                          ElevatedButton(
-                            child: const Text('Selected devices'),
-                            onPressed: () async {
-                              print("selected mic id"+ meeting.selectedMicId!);
-                              print("selected Camera id"+ meeting.selectedCamId!);
-                              Navigator.pop(context);
-                            },
-                          ),
-                        ],
+                            // LiveStream button
+                            ElevatedButton(
+                              child: Text(
+                                isLiveStreamOn
+                                    ? 'Stop Livestream'
+                                    : 'Start Livestream',
+                              ),
+                              onPressed: () {
+                                List liveStreamOptions = [];
+
+                                if (isLiveStreamOn) {
+                                  meeting.stopLivestream();
+                                } else {
+                                  if (liveStreamOptions.isNotEmpty) {
+                                    meeting.startLivestream(liveStreamOptions);
+                                  } else {
+                                    toastMsg(
+                                      "Failed to start livestream. Please add live stream options.",
+                                    );
+                                  }
+                                }
+
+                                Navigator.pop(context);
+                              },
+                            ),
+                            ElevatedButton(
+                              child: const Text('Selected devices'),
+                              onPressed: () async {
+                                print(
+                                    "selected mic id ${meeting.selectedMic?.deviceId} ${meeting.selectedMic?.label}");
+                                print("selected Camera id" +
+                                    meeting.selectedCamId!);
+                                print(
+                                    "selected speaker ${meeting.selectedSpeaker?.deviceId} ${meeting.selectedSpeaker?.label}");
+                                Navigator.pop(context);
+                              },
+                            ),
+                            ElevatedButton(
+                              child: const Text('Apply Package Background'),
+                              onPressed: () {
+                                Uri backgroundImageUri = Uri.parse(
+                                    "https://st.depositphotos.com/2605379/52364/i/450/depositphotos_523648932-stock-photo-concrete-rooftop-night-city-view.jpg");
+                                VideosdkMediaEffects.applyVirtualBackground(
+                                    backgroundSource: backgroundImageUri);
+                                // VideoSDK.applyVideoProcessor(videoProcessorName: "VirtualBGProcessor");
+
+                                Navigator.pop(context);
+                              },
+                            ),
+                            ElevatedButton(
+                              child: const Text('Change Virtual Background'),
+                              onPressed: () {
+                                Uri backgroundImageUri = Uri.parse(
+                                    "https://wallpapers.com/images/featured/abstract-background-6m6cjbifu3zpfv84.jpg");
+                                VideosdkMediaEffects.changeVirtualBackground(
+                                    backgroundSource: backgroundImageUri);
+
+                                Navigator.pop(context);
+                              },
+                            ),
+                            ElevatedButton(
+                              child: const Text('Remove Virtual Background'),
+                              onPressed: () {
+                                // VideoSDK.removeVideoProcessor();
+                                VideosdkMediaEffects.removeVirtualBackground();
+                                Navigator.pop(context);
+                              },
+                            ),
+
+                            ElevatedButton(
+                              child: const Text('Low Resolution'),
+                              onPressed: () {
+                                meeting.participants.forEach((key, value) {
+                                  value.setQuality('low');
+                                });
+
+                                Navigator.pop(context);
+                              },
+                            ),
+
+                            ElevatedButton(
+                              child: const Text('Med Resolution'),
+                              onPressed: () {
+                                meeting.participants.forEach((key, value) {
+                                  value.setQuality('med');
+                                });
+
+                                Navigator.pop(context);
+                              },
+                            ),
+
+                            ElevatedButton(
+                              child: const Text('High Resolution'),
+                              onPressed: () {
+                                meeting.participants.forEach((key, value) {
+                                  value.setQuality('high');
+                                });
+
+                                Navigator.pop(context);
+                              },
+                            ),
+                        
+                            //check selected devices
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -495,6 +608,15 @@ class _MeetingScreenState extends State<MeetingScreen> {
                             ),
                           ),
                         ),
+                      if (isWhiteboardOn)
+                        SizedBox(
+                          height: 300,
+                          width: 350,
+                          child: WebViewWidget(
+                            controller: controller,
+                                                
+                          ),
+                        ),
                       Expanded(
                         child: ParticipantGridView(meeting: meeting),
                       ),
@@ -515,18 +637,71 @@ class _MeetingScreenState extends State<MeetingScreen> {
     );
   }
 
+  void registerCharacterEvents(Character character) {
+    character.on(Events.characterJoined, (Character character) {
+      print(
+          "Character Joined in character event with config $character ${character.runtimeType}");
+    });
+
+    character.on(Events.characterLeft, (Character character) {
+      print(
+          "Character left in character event with config $character ${character.runtimeType}");
+    });
+
+    character.on(Events.characterMessage, (CharacterMessage message) {
+      print("character Message $message ${message.runtimeType}");
+    });
+
+    character.on(Events.characterStateChanged, (CharacterState state) {
+      print("character state changed $state ${state.runtimeType}");
+    });
+
+    character.on(Events.streamEnabled, (data) {
+      print("stream come $data");
+    });
+  }
+
   void registerMeetingEvents(Room _meeting) {
+    VideoSDK.on(Events.deviceChanged, () async {
+      cameras = await VideoSDK.getVideoDevices();
+      List<AudioDeviceInfo>? audioDeviceInfo = await VideoSDK.getAudioDevices();
+
+      mics = [];
+      speakers = [];
+
+      if (audioDeviceInfo != null) {
+        for (var device in audioDeviceInfo) {
+          if (device.kind == 'audioinput') {
+            mics?.add(device);
+          } else {
+            speakers?.add(device);
+          }
+        }
+      }
+    });
     // Called when joined in meeting
     _meeting.on(
       Events.roomJoined,
-      () {
+      () async {
         setState(() {
           meeting = _meeting;
           _joined = true;
         });
 
         // Holds available cameras info
-        cameras = _meeting.getCameras();
+        cameras = await VideoSDK.getVideoDevices();
+        List<AudioDeviceInfo>? audioDeviceInfo =
+            await VideoSDK.getAudioDevices();
+
+        if (audioDeviceInfo != null) {
+          for (var device in audioDeviceInfo) {
+            if (device.kind == 'audioinput') {
+              mics?.add(device);
+            } else {
+              speakers?.add(device);
+            }
+          }
+        }
       },
     );
 
@@ -563,6 +738,32 @@ class _MeetingScreenState extends State<MeetingScreen> {
       });
     });
 
+    _meeting.on(Events.whiteboardStarted, (url) {
+      toastMsg("Whiteboard started $url .");
+      print("Whiteboard url: $url");
+
+      controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..loadRequest(
+          Uri.parse(url),
+           
+        );
+
+      setState(() {
+        isWhiteboardOn = true;
+      });
+    });
+
+    // Called when recording is stopped
+    _meeting.on(Events.whiteboardStopped, () {
+      toastMsg("Whiteboard stopped.");
+
+      setState(() {
+        isWhiteboardOn = false;
+      });
+    });
+
+
     // Called when LiveStreaming is started
     _meeting.on(Events.liveStreamStarted, () {
       toastMsg("Meeting live streaming started.");
@@ -570,6 +771,11 @@ class _MeetingScreenState extends State<MeetingScreen> {
       setState(() {
         isLiveStreamOn = true;
       });
+    });
+
+    _meeting.on(Events.error, (error) {
+      print(
+          "VIDEOSDK ERROR :: ${error['code']}  :: ${error['name']} :: ${error['message']}");
     });
 
     // Called when LiveStreaming is stopped

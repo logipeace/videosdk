@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:io' show Platform;
@@ -8,10 +9,9 @@ import 'package:events2/events2.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:videosdk_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
 import 'package:videosdk/src/core/room/audio_html/audio_html_interface.dart';
-import 'package:videosdk/src/core/videosdk.dart';
 import 'package:videosdk_otel/api.dart';
 import 'package:videosdk/src/core/room/custom_track_configs.dart';
 import 'package:videosdk/src/core/room/open_telemetry/videosdk_log.dart';
@@ -39,6 +39,7 @@ class Room {
   late final bool _multiStream;
   late final NotificationInfo _notification;
   late String _maxResolution;
+  late bool _debugMode;
 
   late CustomTrack? _customCameraVideoTrack;
   late CustomTrack? _customMicrophoneAudioTrack;
@@ -58,9 +59,13 @@ class Room {
   late PubSub pubSub;
 
   // States for MediaDevices
-  MediaDeviceInfo? _selectedAudioInput;
-  MediaDeviceInfo? _selectedVideoInput;
-  MediaDeviceInfo? _selectedAudioOutput;
+
+  VideoDeviceInfo? _selectedVideoInput;
+  List<VideoDeviceInfo>? videoDevices;
+  List<AudioDeviceInfo>? audioDevices;
+
+  AudioDeviceInfo? _selectedAudioOutput;
+  AudioDeviceInfo? _selectedAudioInput;
 
   // States
   bool _cameraInProgress = false;
@@ -119,25 +124,27 @@ class Room {
 
   late int _defaultCameraIndex;
 
+  Map<String, dynamic>? characters = {};
+
   //
-  Room({
-    required String meetingId,
-    required String token,
-    required String participantId,
-    required String displayName,
-    required bool micEnabled,
-    required bool camEnabled,
-    required String maxResolution,
-    required bool multiStream,
-    required CustomTrack? customCameraVideoTrack,
-    required CustomTrack? customMicrophoneAudioTrack,
-    required NotificationInfo notification,
-    required Mode mode,
-    required Map<String, dynamic> metaData,
-    int defaultCameraIndex = 0,
-    required String signalingBaseUrl,
-    required PreferredProtocol preferredProtocol,
-  }) {
+  Room(
+      {required String meetingId,
+      required String token,
+      required String participantId,
+      required String displayName,
+      required bool micEnabled,
+      required bool camEnabled,
+      required String maxResolution,
+      required bool multiStream,
+      required CustomTrack? customCameraVideoTrack,
+      required CustomTrack? customMicrophoneAudioTrack,
+      required NotificationInfo notification,
+      required Mode mode,
+      required Map<String, dynamic> metaData,
+      int defaultCameraIndex = 0,
+      required String signalingBaseUrl,
+      required PreferredProtocol preferredProtocol,
+      required bool debugMode}) {
     //
     id = meetingId;
     //
@@ -158,6 +165,8 @@ class Room {
     _customCameraVideoTrack = customCameraVideoTrack;
     //
     _customMicrophoneAudioTrack = customMicrophoneAudioTrack;
+    //
+    _debugMode = debugMode;
 
     _mode = mode;
     if (mode == Mode.CONFERENCE) {
@@ -250,6 +259,52 @@ class Room {
           .traceAutoComplete(spanName: 'Emitted `PRESENTER-CHANGED` Event');
     });
 
+    _eventEmitter.on("INIT_CHARACTER", (character) {
+      characters?[character.id] = character;
+    });
+
+    _eventEmitter.on("ADD_CHARACTER", (config) {
+      var id = config['id'];
+      Character? character = characters?[id];
+
+      if (character == null) {
+        CharacterConfig characterConfig = CharacterConfig.newInteraction(
+            characterId: config['id'],
+            characterMode: CharacterMode.values.firstWhere(
+                (value) => value.name.toLowerCase() == config['characterMode']),
+            displayName: config['displayName']);
+        character = Character(
+            characterConfig: characterConfig,
+            eventEmitter: _eventEmitter,
+            state: CharacterState.values
+                .firstWhereOrNull((value) => value.name == config['state']),
+            enablePeerMic: _enablePeerMic,
+            disablePeerMic: _disablePeerMic,
+            enablePeerCamera: _enablePeerCamera,
+            disablePeerCamera: _disablePeerCamera,
+            joinCharacter: _joinCharacter,
+            removeCharacter: _removeCharacter,
+            sendMessage: _sendCharacterMessage,
+            interruptCharacter: _interruptCharacter);
+        characters?[character.id] = character;
+      }
+
+      _eventEmitter.emit("character-joined", character);
+      //To emit event from the character class
+      _eventEmitter.emit("CHARACTER-JOINED", character);
+    });
+
+    _eventEmitter.on("REMOVE_CHARACTER", (config) {
+      var id = config['id'];
+      if (characters?.containsKey(id) == true) {
+        Character character = characters?[id];
+        _eventEmitter.emit("character-left", character);
+        //To emit event from the character class
+        _eventEmitter.emit("CHARACTER-LEFT", character);
+        characters?.remove(id);
+      }
+    });
+
     _metricsCollector = VideoSDKMetrics(VideoSDKMetricsConfig(
         eventEmitter: _eventEmitter,
         name: "RoomMetrics",
@@ -257,71 +312,78 @@ class Room {
         peerId: participantId));
   }
 
-  getDefaultDevices(defaultCameraIndex) async {
+  _getDefaultDevices(defaultCameraIndex) async {
     try {
-      Map<MediaDeviceType, List<MediaDeviceInfo>> mediaDevices =
-          await VideoSDK.loadMediaDevices();
+      videoDevices = await VideoSDK.getVideoDevices();
+      audioDevices = await VideoSDK.getAudioDevices();
 
       //If custom track is given, set the deviceId from custom track as the selected device.
       //Otherwise set the selected device as the first device, because
       //enableMicImpl needs a device to make a custom track
       if (_customMicrophoneAudioTrack != null) {
-        setSelectedMicId(customTrack: _customMicrophoneAudioTrack);
+        _setSelectedMicId(customTrack: _customMicrophoneAudioTrack);
       } else {
-        _selectedAudioInput = mediaDevices[MediaDeviceType.audioInput]?.first;
+        _selectedAudioInput = audioDevices
+            ?.firstWhereOrNull((device) => device.kind == "audioinput");
       }
 
       //If custom track is given, set the deviceId from custom track as the selected device.
       //Otherwise set the selected device as the first device, because
       //enableCamImpl needs a device to make a custom track
       if (_customCameraVideoTrack != null) {
-        setSelectedCamId(customTrack: _customCameraVideoTrack);
+        _setSelectedCamId(customTrack: _customCameraVideoTrack);
       } else {
-        _selectedVideoInput =
-            mediaDevices[MediaDeviceType.videoInput]?[defaultCameraIndex];
+        _selectedVideoInput = videoDevices?[defaultCameraIndex];
       }
 
       //In windows, and iOS the newly connected devices are rendered at the last position.
       if (!kIsWeb) {
         if (Platform.isWindows || Platform.isIOS) {
-          _selectedAudioOutput =
-              mediaDevices[MediaDeviceType.audioOutput]?.last;
+          _selectedAudioOutput = audioDevices
+              ?.lastWhereOrNull((device) => device.kind == "audiooutput");
         }
       }
       if (kIsWeb || Platform.isAndroid || Platform.isMacOS) {
-        _selectedAudioOutput = mediaDevices[MediaDeviceType.audioOutput]?.first;
+        _selectedAudioOutput = audioDevices
+            ?.firstWhereOrNull((device) => device.kind == "audiooutput");
       }
 
-      List<AudioDeviceInfo>? audioDevices = await VideoSDK.getAudioDevices();
+      List<AudioDeviceInfo>? tempAudioDevices =
+          await VideoSDK.getAudioDevices();
 
       //Not available for MacOS
       VideoSDK.on(Events.deviceChanged, () async {
+        videoDevices = await VideoSDK.getVideoDevices();
+        audioDevices = await VideoSDK.getAudioDevices();
         if (!kIsWeb) {
           //In IOS and Windows the newly connected device is coming last in the list.
           if (Platform.isIOS || Platform.isWindows) {
-            _selectedAudioOutput =
-                mediaDevices[MediaDeviceType.audioOutput]!.last;
-            _selectedAudioInput =
-                mediaDevices[MediaDeviceType.audioInput]!.last;
+            _selectedAudioOutput = audioDevices
+                ?.lastWhereOrNull((device) => device.kind == "audiooutput");
+            _selectedAudioInput = audioDevices
+                ?.lastWhereOrNull((device) => device.kind == "audioinput");
           }
           //In android, deviceChange event coming even when switching from one device to another.
           // Change device id only when new device is connected/disconnected.
-          if (Platform.isAndroid) {
+          else {
             //Get a new audio device list
-            List<AudioDeviceInfo>? changedAudioDevices =
-                await VideoSDK.getAudioDevices();
-            if (audioDevices?.length != changedAudioDevices?.length) {
-              _selectedAudioOutput =
-                  mediaDevices[MediaDeviceType.audioOutput]!.first;
-              _selectedAudioInput =
-                  mediaDevices[MediaDeviceType.audioInput]!.first;
-              audioDevices = changedAudioDevices;
+            AudioDeviceInfo? device = audioDevices?.firstWhereOrNull(
+                (newDevice) => !tempAudioDevices!.any(
+                    (oldDevice) => oldDevice.deviceId == newDevice.deviceId));
+            if (tempAudioDevices?.length != audioDevices?.length ||
+                device?.deviceId != null) {
+              _selectedAudioOutput = audioDevices
+                  ?.firstWhereOrNull((device) => device.kind == "audiooutput");
+              _selectedAudioInput = audioDevices
+                  ?.firstWhereOrNull((device) => device.kind == "audioinput");
+              tempAudioDevices = audioDevices;
             }
           }
         } else {
-          _selectedAudioOutput =
-              mediaDevices[MediaDeviceType.audioOutput]!.first;
-          _selectedAudioInput = mediaDevices[MediaDeviceType.audioInput]!.first;
+          _selectedAudioOutput = audioDevices
+              ?.firstWhereOrNull((device) => device.kind == "audiooutput");
+          _selectedAudioInput = audioDevices
+              ?.firstWhereOrNull((device) => device.kind == "audioinput");
         }
       });
     } catch (error) {
@@ -353,6 +415,12 @@ class Room {
 
   //
   Future<void> _disableMic({Span? parentSpan, bool trackEnded = false}) async {
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in muteMic(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      return;
+    }
     Span? _disableMicSpan;
 
     try {
@@ -395,12 +463,14 @@ class Room {
 
       try {
         //
-        await _webSocket!.socket.request(
-          'closeProducer',
-          {
-            'producerId': micId,
-          },
-        );
+        if (_webSocket != null) {
+          await _webSocket!.socket.request(
+            'closeProducer',
+            {
+              'producerId': micId,
+            },
+          );
+        }
 
         if (internalSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -422,10 +492,18 @@ class Room {
 
         _micState = false;
       } catch (error) {
+        Map<String, String> attributes = {
+          "error": "Error in muteMic() :: Something went wrong.",
+          "errorMessage": "Error in muteMic(): ${error.toString()}"
+        };
         VideoSDKLog.createLog(
-            message: "Error in disableMic() \n ${error.toString()}",
-            logLevel: "ERROR");
-        log("Error while closing remote audio producer $error");
+            message:
+                "Something went wrong, and the microphone could not be disabled. Please try again.",
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in muteMic(): Something went wrong, and the microphone could not be disabled. Please try again.");
 
         if (internalSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -447,28 +525,48 @@ class Room {
         _micInProgress = false;
       }
     } else {
-      VideoSDKLog.createLog(
-          message: "Error in disableMic() \n micProducer is null",
-          logLevel: "ERROR");
-
       //
-      if (_disableMicSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-          span: _disableMicSpan,
-          message: 'Mic Producer Not found',
-          status: StatusCode.error,
-        );
-      }
+      try {
+        if (_disableMicSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+            span: _disableMicSpan,
+            message: 'Mic Producer Not found',
+            status: StatusCode.error,
+          );
+        }
+      } catch (e) {}
 
-      log("mic is not enabled");
+      Map<String, String> attributes = {
+        "error": "Error in muteMic() :: Microphone is already disabled."
+      };
+      VideoSDKLog.createLog(
+          message:
+              "Attempted to call muteMic() while the microphone is already disabled",
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in muteMic(): Attempted to call muteMic() while the microphone is already disabled");
     }
   }
 
   //
   Future<void> _enableMicImpl(
       {CustomTrack? customTrack, Span? parentSpan}) async {
+    //If method is called before meeting is joined
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in unmuteMic(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      if (customTrack != null) {
+        customTrack.dispose();
+      }
+      return;
+    }
     Span? enableMicSpan;
     Span? micProducerSpan;
+    AudioDeviceInfo? deviceToSwitch;
+
     try {
       enableMicSpan = videoSDKTelemetery!.trace(
         spanName:
@@ -485,9 +583,64 @@ class Room {
     } catch (error) {}
 
     if (_micInProgress) {
+      try {
+        if (enableMicSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+            span: enableMicSpan,
+            status: StatusCode.error,
+            message: 'enableMic() Failed | microphone is in progress',
+          );
+        }
+        Map<String, String> attributes = {
+          "error": "Error in unmuteMic() :: Microphone is already enabled."
+        };
+        VideoSDKLog.createLog(
+            message:
+                "Attempted to call unmuteMic() while the microphone is already enabled",
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in unmuteMic(): Attempted to call unmuteMic() while the microphone is already enabled");
+      } catch (error) {}
+      if (customTrack != null) {
+        customTrack.dispose();
+      }
       return;
     }
 
+    _micInProgress = true;
+
+    if (!kIsWeb) {
+      if (Platform.isAndroid || Platform.isIOS) {
+        if (customTrack != null && customTrack.microphoneId != null) {
+          var speakers = await VideoSDK.getAudioDevices();
+          deviceToSwitch = speakers?.firstWhereOrNull(
+              (speaker) => speaker.deviceId == customTrack?.microphoneId);
+        }
+      }
+    }
+
+    if (customTrack != null) {
+      if (customTrack.ended == true) {
+        customTrack = null;
+        _eventEmitter.emit("error", VideoSDKErrors[3002]);
+
+        Map<String, String> attributes = {
+          "error":
+              "Error in unmuteMic(): Provided Custom Track has been disposed."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3002]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in unmuteMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3002]?['code']}  :: ${VideoSDKErrors[3002]?['name']} :: ${VideoSDKErrors[3002]?['message']}");
+      }
+    }
+
+    //If mic is unmuted other than the first time.
     if (_micProducer != null) {
       try {
         if (enableMicSpan != null) {
@@ -537,19 +690,56 @@ class Room {
         );
       }
 
-      _sendTransport!.produce(
-        track: track,
-        codecOptions: codecOptions,
-        stream: audioStream,
-        appData: {
-          'source': 'mic',
-          'encoderConfig': encoderConfig,
-        },
-        stopTracks: false,
-        source: 'mic',
-      );
+      if (_sendTransport != null) {
+        _sendTransport!.produce(
+          track: track,
+          codecOptions: codecOptions,
+          stream: audioStream,
+          appData: {
+            'source': 'mic',
+            'encoderConfig': encoderConfig,
+          },
+          stopTracks: false,
+          source: 'mic',
+        );
+      } else {
+        try {
+          if (micProducerSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: micProducerSpan,
+              status: StatusCode.error,
+              message: 'Mic Producer Resuming failed',
+            );
+          }
 
-      _micInProgress = true;
+          if (enableMicSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: enableMicSpan,
+              status: StatusCode.error,
+              message: 'Enable Mic UnSuccessful, _sendTransport is null.',
+            );
+          }
+        } catch (error) {}
+
+        _eventEmitter.emit("error", VideoSDKErrors[3012]);
+
+        Map<String, String> attributes = {
+          "error": "Error in unmuteMic(): Something went wrong.",
+          "errorMessage": "unmuteMic(): _sendTransport is null."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3012]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in unmuteMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3012]?['code']}  :: ${VideoSDKErrors[3012]?['name']} :: ${VideoSDKErrors[3012]?['message']}");
+        if (customTrack != null) {
+          customTrack.dispose();
+        }
+        _micInProgress = false;
+        return;
+      }
 
       try {
         if (micProducerSpan != null) {
@@ -569,7 +759,14 @@ class Room {
         }
 
         _micState = true;
-        setSelectedMicId(customTrack: customTrack);
+
+        if (kIsWeb || Platform.isWindows || Platform.isMacOS) {
+          _setSelectedMicId(customTrack: customTrack);
+        } else {
+          if (deviceToSwitch != null) {
+            switchAudioDevice(deviceToSwitch);
+          }
+        }
       } catch (error) {}
 
       return;
@@ -579,25 +776,33 @@ class Room {
 
     //
     if (_device?.canProduce(RTCRtpMediaType.RTCRtpMediaTypeAudio) == false) {
-      _eventEmitter.emit("error", VideoSDKErrors[3012]);
+      _eventEmitter.emit("error", VideoSDKErrors[3020]);
       //
+      Map<String, String> attributes = {
+        "error": "Error in unmuteMic(): Device cannot produce audio."
+      };
       VideoSDKLog.createLog(
-          message: "Error in enableMic() \n Device can't produce audio.",
-          logLevel: "ERROR");
+          message: VideoSDKErrors[3020]!['message']!,
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in unmuteMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3020]?['code']}  :: ${VideoSDKErrors[3020]?['name']} :: ${VideoSDKErrors[3020]?['message']}");
+
       //
-      if (customTrack != null) {
-        customTrack.dispose();
-      }
       try {
         if (enableMicSpan != null) {
           videoSDKTelemetery!.completeSpan(
             span: enableMicSpan,
             status: StatusCode.error,
-            message: 'enableMic() | cannot produce video',
+            message: 'enableMic() | cannot produce audio',
           );
         }
       } catch (error) {}
-
+      if (customTrack != null) {
+        customTrack.dispose();
+      }
+      _micInProgress = false;
       return;
     }
 
@@ -616,6 +821,44 @@ class Room {
           microphoneId: _selectedAudioInput?.deviceId,
           encoderConfig: CustomAudioTrackConfig.speech_standard);
 
+      //If there is an error, createMicrophoneAudioTrack will return null.
+      if (customTrack == null) {
+        try {
+          if (internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: internalSpan,
+              status: StatusCode.error,
+              message: 'enableMic() | Track could not be created',
+            );
+          }
+          if (enableMicSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: enableMicSpan,
+              status: StatusCode.error,
+              message:
+                  'enableMic() | Cannot produce audio, some error occured while creating audio track.',
+            );
+          }
+        } catch (error) {}
+
+        _eventEmitter.emit("error", VideoSDKErrors[3012]);
+        Map<String, String> attributes = {
+          "error": "Error in unmuteMic(): Something went wrong.",
+          "errorMessage":
+              "Error in unmuteMic() : Custom Track could not be created."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3012]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in unmuteMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3012]?['code']}  :: ${VideoSDKErrors[3012]?['name']} :: ${VideoSDKErrors[3012]?['message']}");
+
+        _micInProgress = false;
+        return;
+      }
+
       try {
         if (internalSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -630,7 +873,8 @@ class Room {
 
     //Updating the list, in case permission status has changed.
     //(As in web, device labels and ids are not available w/o media permissions.)
-    await VideoSDK.loadMediaDevices();
+    //await VideoSDK.loadMediaDevices();
+    audioDevices = await VideoSDK.getAudioDevices();
 
     //
     MediaStream? audioStream;
@@ -647,7 +891,7 @@ class Room {
         }
       } catch (error) {}
       //
-      audioStream = customTrack!.mediaStream;
+      audioStream = customTrack.mediaStream;
       //
       track = audioStream.getAudioTracks().first;
 
@@ -694,17 +938,60 @@ class Room {
       );
 
       //
-      _sendTransport!.produce(
-        track: track,
-        codecOptions: codecOptions,
-        stream: audioStream,
-        appData: {
-          'source': 'mic',
-          'encoderConfig': encoderConfig,
-        },
-        stopTracks: false,
-        source: 'mic',
-      );
+      if (_sendTransport != null) {
+        _sendTransport!.produce(
+          track: track,
+          codecOptions: codecOptions,
+          stream: audioStream,
+          appData: {
+            'source': 'mic',
+            'encoderConfig': encoderConfig,
+          },
+          stopTracks: false,
+          source: 'mic',
+        );
+      } else {
+        try {
+          if (_internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: _internalSpan,
+              status: StatusCode.error,
+              message: 'Send transport is null',
+            );
+          }
+
+          if (enableMicSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: enableMicSpan,
+              status: StatusCode.error,
+              message:
+                  'Mic could not be enabled, method was called when send transport was null.',
+            );
+          }
+        } catch (error) {}
+
+        _eventEmitter.emit("error", VideoSDKErrors[3012]);
+
+        Map<String, String> attributes = {
+          "error": "Error in unmuteMic(): Something went wrong.",
+          "errorMessage": "unmuteMic(): _sendTransport is null."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3012]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in unmuteMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3012]?['code']}  :: ${VideoSDKErrors[3012]?['name']} :: ${VideoSDKErrors[3012]?['message']}");
+        if (customTrack != null) {
+          customTrack.dispose();
+        }
+        if (audioStream != null) {
+          await audioStream.dispose();
+        }
+        _micInProgress = false;
+        return;
+      }
 
       try {
         if (_internalSpan != null) {
@@ -726,21 +1013,35 @@ class Room {
         }
 
         _micState = true;
-        setSelectedMicId(customTrack: customTrack);
+
+        if (kIsWeb || Platform.isWindows || Platform.isMacOS) {
+          _setSelectedMicId(customTrack: customTrack);
+        } else {
+          if (deviceToSwitch != null) {
+            switchAudioDevice(deviceToSwitch);
+          }
+        }
       } catch (error) {}
-      ;
     } catch (error) {
       _micInProgress = false;
       //
+      _eventEmitter.emit("error", VideoSDKErrors[3012]);
+      Map<String, String> attributes = {
+        "error": "Error in unmuteMic(): Something went wrong.",
+        "errorMessage": "Error in unmuteMic() : ${error.toString()}."
+      };
       VideoSDKLog.createLog(
-          message: "Error in enableMic() \n ${error.toString()}",
-          logLevel: "ERROR");
+          message: VideoSDKErrors[3012]!['message']!,
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in unmuteMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3012]?['code']}  :: ${VideoSDKErrors[3012]?['name']} :: ${VideoSDKErrors[3012]?['message']}");
+
       //
       if (audioStream != null) {
-        //
         await audioStream.dispose();
       }
-      _eventEmitter.emit("error", VideoSDKErrors[3012]);
 
       if (_internalSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -760,23 +1061,28 @@ class Room {
     }
   }
 
-  Future<void> setSelectedMicId({CustomTrack? customTrack}) async {
+  Future<void> _setSelectedMicId({CustomTrack? customTrack}) async {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      return;
+    }
+
     try {
       MediaStreamTrack? track = customTrack?.mediaStream.getAudioTracks().first;
       if (!kIsWeb) {
         //For devices other than web directly getting deviceId on customTrack
         if (track != null && track.getSettings().containsKey("deviceId")) {
-          MediaDeviceInfo device =
-              VideoSDK.mediaDevices[MediaDeviceType.audioInput]!.firstWhere(
-            (device) => device.deviceId == track.getSettings()["deviceId"],
+          AudioDeviceInfo? device = audioDevices?.firstWhereOrNull(
+            (device) =>
+                device.deviceId == track.getSettings()["deviceId"] &&
+                device.kind == "audioinput",
           );
           _selectedAudioInput = device;
         }
       } else {
         if (track != null && track.label != null) {
-          MediaDeviceInfo device =
-              VideoSDK.mediaDevices[MediaDeviceType.audioInput]!.firstWhere(
-            (device) => device.label == track.label,
+          AudioDeviceInfo? device = audioDevices?.firstWhereOrNull(
+            (device) =>
+                device.label == track.label && device.kind == "audioinput",
           );
           _selectedAudioInput = device;
         }
@@ -790,8 +1096,18 @@ class Room {
   //
   Future<void> _enableCamImpl(
       {CustomTrack? customTrack, Span? parentSpan}) async {
-    Span? enableWebcamSpan;
+    //If method is called before meeting is joined
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in enableCam(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      if (customTrack != null) {
+        customTrack.dispose();
+      }
+      return;
+    }
     // send trace enableCam
+    Span? enableWebcamSpan;
     try {
       if (videoSDKTelemetery != null) {
         enableWebcamSpan = videoSDKTelemetery!.trace(
@@ -809,6 +1125,7 @@ class Room {
       }
     } catch (error) {}
 
+    //If camera is already enabled, return without enabling it again
     if (_cameraInProgress) {
       try {
         if (enableWebcamSpan != null) {
@@ -818,34 +1135,76 @@ class Room {
             message: 'enableWebcam() Failed | camera is in progress',
           );
         }
+        Map<String, String> attributes = {
+          "error": "Error in enableCam() :: Webcam is already enabled."
+        };
+        VideoSDKLog.createLog(
+            message:
+                "Attempted to call enableCam() while the webcam is already enabled",
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableCam(): Attempted to call enableCam() while the webcam is already enabled");
       } catch (error) {}
+      if (customTrack != null) {
+        customTrack.dispose();
+      }
       return;
     }
 
     _cameraInProgress = true;
 
+    //If the device is incapable of producing video
     if (_device?.canProduce(RTCRtpMediaType.RTCRtpMediaTypeVideo) == false) {
-      //
-      VideoSDKLog.createLog(
-          message: "Error in enableCam() \n Device can't produce video.",
-          logLevel: "ERROR");
+      _eventEmitter.emit("error", VideoSDKErrors[3019]);
 
-      _eventEmitter.emit("error", VideoSDKErrors[3011]);
-      if (customTrack != null) {
-        customTrack.dispose();
-      }
+      Map<String, String> attributes = {
+        "error": "Error in enableCam(): Device cannot produce video."
+      };
+      VideoSDKLog.createLog(
+          message: VideoSDKErrors[3019]!['message']!,
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in enableCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3019]?['code']}  :: ${VideoSDKErrors[3019]?['name']} :: ${VideoSDKErrors[3019]?['message']}");
 
       try {
         if (enableWebcamSpan != null) {
           videoSDKTelemetery!.completeSpan(
             span: enableWebcamSpan,
             status: StatusCode.error,
-            message: 'enableWebcam() | cannot produce video',
+            message: 'enableWebcam() | device cannot produce video',
           );
         }
       } catch (error) {}
 
+      if (customTrack != null) {
+        customTrack.dispose();
+      }
+      _cameraInProgress = false;
       return;
+    }
+
+    //If user has given a track that has been disposed.
+    if (customTrack != null) {
+      if (customTrack.ended == true) {
+        customTrack = null;
+        _eventEmitter.emit("error", VideoSDKErrors[3001]);
+
+        Map<String, String> attributes = {
+          "error":
+              "Error in enableCam(): Provided Custom Track has been disposed."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3001]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3001]?['code']}  :: ${VideoSDKErrors[3001]?['name']} :: ${VideoSDKErrors[3001]?['message']}");
+      }
     }
 
     if (customTrack == null) {
@@ -860,9 +1219,47 @@ class Room {
       } catch (error) {}
 
       customTrack = await VideoSDK.createCameraVideoTrack(
-          cameraId: _selectedVideoInput!.deviceId,
+          cameraId: _selectedVideoInput?.deviceId,
           multiStream: _multiStream,
           encoderConfig: CustomVideoTrackConfig.h720p_w1280p);
+
+      //If there is an error, createCameraVideoTrack will return null.
+      if (customTrack == null) {
+        try {
+          if (_internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: _internalSpan,
+              status: StatusCode.error,
+              message: 'enableWebcam() | Track could not be created',
+            );
+          }
+          if (enableWebcamSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: enableWebcamSpan,
+              status: StatusCode.error,
+              message:
+                  'enableWebcam() | Cannot produce video, some error occured while creating video track.',
+            );
+          }
+        } catch (error) {}
+
+        _eventEmitter.emit("error", VideoSDKErrors[3011]);
+        Map<String, String> attributes = {
+          "error": "Error in enableCam(): Something went wrong.",
+          "errorMessage":
+              "Error in enableCam() : Custom Track could not be created."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3011]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3011]?['code']}  :: ${VideoSDKErrors[3011]?['name']} :: ${VideoSDKErrors[3011]?['message']}");
+
+        _cameraInProgress = false;
+        return;
+      }
 
       try {
         if (_internalSpan != null) {
@@ -880,7 +1277,8 @@ class Room {
 
     //Updating the list, in case permission status has changed.
     //(As in web, device labels and ids are not available w/o media permissions.)
-    await VideoSDK.loadMediaDevices();
+    //await VideoSDK.loadMediaDevices();
+    videoDevices = await VideoSDK.getVideoDevices();
 
     try {
       try {
@@ -891,45 +1289,86 @@ class Room {
         }
       } catch (error) {}
 
+      RtpCodecCapability? codec;
       // NOTE: prefer using h264
-      RtpCodecCapability? codec = _device!.rtpCapabilities.codecs.firstWhere(
-          (RtpCodecCapability c) {
-        return c.mimeType.toLowerCase() == 'video/vp9' ||
-            c.mimeType.toLowerCase() == 'video/vp8';
-      },
-          // (RtpCodecCapability c) => c.mimeType.toLowerCase() == 'video/h264',
-          orElse: () {
-        //
+      if (_device != null) {
+        codec = _device!.rtpCapabilities.codecs.firstWhere(
+            (RtpCodecCapability c) {
+          return c.mimeType.toLowerCase() == 'video/vp9' ||
+              c.mimeType.toLowerCase() == 'video/vp8';
+        },
+            // (RtpCodecCapability c) => c.mimeType.toLowerCase() == 'video/h264',
+            orElse: () {
+          //
+          VideoSDKLog.createLog(
+              message:
+                  "Error in enableCam() \n desired vp9 codec+configuration is not supported",
+              logLevel: "ERROR");
+
+          try {
+            if (_internalSpan != null) {
+              videoSDKTelemetery!.completeSpan(
+                span: _internalSpan,
+                status: StatusCode.error,
+                message: 'Webcam Producer Creation Failed',
+              );
+            }
+
+            if (enableWebcamSpan != null) {
+              videoSDKTelemetery!.completeSpan(
+                span: enableWebcamSpan,
+                status: StatusCode.error,
+                message:
+                    'Enable Webcam Failed \n desired vp9 codec+configuration is not supported',
+              );
+            }
+          } catch (e) {}
+          //
+          throw UnsupportedError(
+              "Device does not support vp9 codec+configuration");
+        });
+      } else {
+        try {
+          if (_internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: _internalSpan,
+              status: StatusCode.error,
+              message: 'MediaSoup device not found',
+            );
+          }
+
+          if (enableWebcamSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: enableWebcamSpan,
+              status: StatusCode.error,
+              message: 'Enable Webcam Failed \n Mediasoup device not found',
+            );
+          }
+        } catch (e) {}
+
+        _eventEmitter.emit("error", VideoSDKErrors[3011]);
+
+        Map<String, String> attributes = {
+          "error": "Error in enableCam(): Something went wrong.",
+          "errorMessage": "enableCam(): MediaSoup device not found."
+        };
         VideoSDKLog.createLog(
-            message:
-                "Error in enableCam() \n desired vp9 codec+configuration is not supported",
-            logLevel: "ERROR");
-
-        if (_internalSpan != null) {
-          videoSDKTelemetery!.completeSpan(
-            span: _internalSpan,
-            status: StatusCode.error,
-            message: 'Webcam Producer Creatation Failed',
-          );
+            message: VideoSDKErrors[3011]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3011]?['code']}  :: ${VideoSDKErrors[3011]?['name']} :: ${VideoSDKErrors[3011]?['message']}");
+        if (customTrack != null) {
+          customTrack.dispose();
         }
+        _cameraInProgress = false;
+        return;
+      }
 
-        if (enableWebcamSpan != null) {
-          videoSDKTelemetery!.completeSpan(
-            span: enableWebcamSpan,
-            status: StatusCode.error,
-            message:
-                'Enable Webcam Failed \n desired vp9 codec+configuration is not supported',
-          );
-        }
-        //
-        throw 'desired vp9 codec+configuration is not supported';
-      });
-
-      videoStream = customTrack!.mediaStream;
+      videoStream = customTrack.mediaStream;
 
       track = videoStream.getVideoTracks().first;
-
-      _cameraInProgress = true;
 
       // check browser is Firefox or not
       bool isFirefox =
@@ -991,17 +1430,60 @@ class Room {
         }
       } catch (error) {}
 
-      _sendTransport!.produce(
-        track: track,
-        codecOptions: ProducerCodecOptions(
-          videoGoogleStartBitrate: 1000,
-        ),
-        encodings: encodings,
-        stream: videoStream,
-        appData: appData,
-        source: 'webcam',
-        codec: codec,
-      );
+      if (_sendTransport != null) {
+        _sendTransport!.produce(
+          track: track,
+          codecOptions: ProducerCodecOptions(
+            videoGoogleStartBitrate: 1000,
+          ),
+          encodings: encodings,
+          stream: videoStream,
+          appData: appData,
+          source: 'webcam',
+          codec: codec,
+        );
+      } else {
+        try {
+          if (_internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: _internalSpan,
+              status: StatusCode.error,
+              message: 'Send transport is null',
+            );
+          }
+
+          if (enableWebcamSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+              span: enableWebcamSpan,
+              status: StatusCode.error,
+              message:
+                  'Webcam could not be enabled, method was called when send transport was null.',
+            );
+          }
+        } catch (error) {}
+
+        _eventEmitter.emit("error", VideoSDKErrors[3011]);
+
+        Map<String, String> attributes = {
+          "error": "Error in enableCam(): Something went wrong.",
+          "errorMessage": "enableCam(): _sendTransport is null."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3011]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3011]?['code']}  :: ${VideoSDKErrors[3011]?['name']} :: ${VideoSDKErrors[3011]?['message']}");
+        if (customTrack != null) {
+          customTrack.dispose();
+        }
+        if (videoStream != null) {
+          await videoStream.dispose();
+        }
+        _cameraInProgress = false;
+        return;
+      }
 
       try {
         if (_internalSpan != null) {
@@ -1023,8 +1505,8 @@ class Room {
         }
 
         _camState = true;
-
-        setSelectedCamId(customTrack: customTrack);
+        _cameraInProgress = true;
+        _setSelectedCamId(customTrack: customTrack);
       } catch (error) {}
     } catch (error) {
       //
@@ -1034,11 +1516,17 @@ class Room {
         await videoStream.dispose();
       }
       _eventEmitter.emit("error", VideoSDKErrors[3011]);
-
-      //
+      Map<String, String> attributes = {
+        "error": "Error in enableCam(): Something went wrong.",
+        "errorMessage": "Error in enableCam() : ${error.toString()}."
+      };
       VideoSDKLog.createLog(
-          message: "Error in enableCam() \n ${error.toString()}",
-          logLevel: "ERROR");
+          message: VideoSDKErrors[3011]!['message']!,
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in enableCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3011]?['code']}  :: ${VideoSDKErrors[3011]?['name']} :: ${VideoSDKErrors[3011]?['message']}");
 
       if (_internalSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -1058,22 +1546,20 @@ class Room {
     }
   }
 
-  Future<void> setSelectedCamId({CustomTrack? customTrack}) async {
+  Future<void> _setSelectedCamId({CustomTrack? customTrack}) async {
     try {
       MediaStreamTrack? track = customTrack?.mediaStream.getVideoTracks().first;
       if (!kIsWeb) {
         //For devices other than web directly getting deviceId on customTrack
         if (track != null && track.getSettings().containsKey("deviceId")) {
-          MediaDeviceInfo device =
-              VideoSDK.mediaDevices[MediaDeviceType.videoInput]!.firstWhere(
+          VideoDeviceInfo? device = videoDevices?.firstWhereOrNull(
             (device) => device.deviceId == track.getSettings()["deviceId"],
           );
           _selectedVideoInput = device;
         }
       } else {
         if (track != null && track.label != null) {
-          MediaDeviceInfo device =
-              VideoSDK.mediaDevices[MediaDeviceType.videoInput]!.firstWhere(
+          VideoDeviceInfo? device = videoDevices?.firstWhereOrNull(
             (device) => device.label == track.label,
           );
           _selectedVideoInput = device;
@@ -1086,6 +1572,13 @@ class Room {
 
   //
   Future<void> _disableCamImpl({Span? parentSpan}) async {
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in disableCam(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      return;
+    }
+
     Span? disableWebcamSpan;
     try {
       if (videoSDKTelemetery != null) {
@@ -1119,9 +1612,11 @@ class Room {
 
       try {
         //
-        await _webSocket!.socket.request('closeProducer', {
-          'producerId': cameraId,
-        });
+        if (_webSocket != null) {
+          await _webSocket!.socket.request('closeProducer', {
+            'producerId': cameraId,
+          });
+        }
 
         if (internalSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -1141,10 +1636,18 @@ class Room {
 
         _camState = false;
       } catch (error) {
-        //
+        Map<String, String> attributes = {
+          "error": "Error in disableWebcam() :: Something went wrong.",
+          "errorMessage": "Error in disableWebcam(): ${error.toString()}"
+        };
         VideoSDKLog.createLog(
-            message: "Error in disableCam() \n ${error.toString()}",
-            logLevel: "ERROR");
+            message:
+                "Something went wrong, and the webCam could not be disabled. Please try again.",
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in disableCam(): Something went wrong, and the webCam could not be disabled. Please try again.");
 
         if (internalSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -1161,9 +1664,6 @@ class Room {
             status: StatusCode.error,
           );
         }
-
-        //
-        log("Error while closing remote video producer $error");
       } finally {
         //
         _cameraInProgress = false;
@@ -1178,7 +1678,17 @@ class Room {
           );
         }
       } catch (error) {}
-      log("camera is not enabled!");
+      Map<String, String> attributes = {
+        "error": "Error in disableCam() :: Webcam is already disabled."
+      };
+      VideoSDKLog.createLog(
+          message:
+              "Attempted to call disableCam() while the webcam is already disabled",
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in disableCam(): Attempted to call disableCam() while the webcam is already disabled");
     }
   }
 
@@ -1188,12 +1698,13 @@ class Room {
           .getSources(types: [SourceType.Screen, SourceType.Window]);
 
       sources.asMap().forEach((key, value) {
-        log("screenshare source name:" + value.name);
+        log("Screenshare source name:${value.name}");
       });
 
       return sources;
     } else {
-      throw "getScreenShareSources() method supports desktop apps only";
+      throw UnsupportedError(
+          'The getScreenShareSources() method is only supported for desktop apps.');
     }
   }
 
@@ -1206,7 +1717,19 @@ class Room {
       {bool iosPermissionGiven = false}) async {
     //
     if (_screenShareInProgress) {
-      //
+      Map<String, String> attributes = {
+        "error":
+            "Error in enableScreenShare() :: Screenshare in already enabled."
+      };
+      VideoSDKLog.createLog(
+          message:
+              "Attempted to call enableScreenShare() while the screenshare is already enabled",
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in enableScreenShare(): Attempted to call enableScreenShare() while the screenshare is already enabled");
+
       return;
     }
 
@@ -1222,6 +1745,7 @@ class Room {
     }
 
     Span? enableShareSpan;
+
     try {
       if (videoSDKTelemetery != null) {
         enableShareSpan = videoSDKTelemetery!.trace(
@@ -1230,17 +1754,9 @@ class Room {
       }
     } catch (error) {}
 
-    if (isMobilePlatform()) {
+    if (_isMobilePlatform()) {
       if (Platform.isIOS && !iosPermissionGiven) {
         VideoSDK.requestIOSScreenSharePermission();
-
-        if (enableShareSpan != null) {
-          videoSDKTelemetery!.completeSpan(
-              span: enableShareSpan,
-              message: 'Permission not granted in iOS',
-              status: StatusCode.error);
-        }
-
         return;
       }
 
@@ -1255,6 +1771,20 @@ class Room {
                   message: 'Permission not granted in android',
                   status: StatusCode.error);
             }
+
+            _eventEmitter.emit("error", VideoSDKErrors[3014]);
+            Map<String, String> attributes = {
+              "error":
+                  "Error in enableScreenShare() : Screenshare Permission denied."
+            };
+            VideoSDKLog.createLog(
+                message: VideoSDKErrors[3014]!['message']!,
+                logLevel: "ERROR",
+                attributes: attributes,
+                dashboardLog: true);
+            print(
+                "An error occurred in enableScreenShare() : VIDEOSDK ERROR :: ${VideoSDKErrors[3014]?['code']}  :: ${VideoSDKErrors[3014]?['name']} :: ${VideoSDKErrors[3014]?['message']}");
+
             return;
           }
 
@@ -1264,11 +1794,18 @@ class Room {
               notificationText: _notification.message,
               callback: null);
         } catch (error) {
-          //
+          _eventEmitter.emit("error", VideoSDKErrors[3016]);
+          Map<String, String> attributes = {
+            "error":
+                "Error in enableScreenShare(): Failed to initialize the foreground service."
+          };
           VideoSDKLog.createLog(
-              message:
-                  "error in starting foreground service \n ${error.toString()}",
-              logLevel: "WARN");
+              message: VideoSDKErrors[3016]!['message']!,
+              logLevel: "ERROR",
+              attributes: attributes,
+              dashboardLog: true);
+          print(
+              "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3016]?['code']}  :: ${VideoSDKErrors[3016]?['name']} :: ${VideoSDKErrors[3016]?['message']}");
 
           if (enableShareSpan != null) {
             videoSDKTelemetery!.completeSpan(
@@ -1277,8 +1814,7 @@ class Room {
                     'error in starting foreground service ${error.toString()}',
                 status: StatusCode.error);
           }
-          //
-          log("error => $error");
+          return;
         }
       }
     }
@@ -1305,35 +1841,80 @@ class Room {
         }
       } catch (error) {}
       //
-      RtpCodecCapability? videoCodec = _device!.rtpCapabilities.codecs.firstWhere(
-          (RtpCodecCapability c) {
-        return c.mimeType.toLowerCase() == 'video/vp9' ||
-            c.mimeType.toLowerCase() == 'video/vp8';
-      },
-          // (RtpCodecCapability c) => c.mimeType.toLowerCase() == 'video/h264',
-          orElse: () {
-        //
-        VideoSDKLog.createLog(
-            message:
-                "Error in enableShare() \n desired vp9 codec+configuration is not supported",
-            logLevel: "ERROR");
+      RtpCodecCapability? videoCodec;
 
-        if (_internalSpan != null) {
-          videoSDKTelemetery!.completeSpan(
+      if (_device != null) {
+        videoCodec = _device!.rtpCapabilities.codecs.firstWhere(
+            (RtpCodecCapability c) {
+          return c.mimeType.toLowerCase() == 'video/vp9' ||
+              c.mimeType.toLowerCase() == 'video/vp8';
+        },
+            // (RtpCodecCapability c) => c.mimeType.toLowerCase() == 'video/h264',
+            orElse: () {
+          //
+          VideoSDKLog.createLog(
+              message:
+                  "Error in enableShare() \n desired vp9 codec+configuration is not supported",
+              logLevel: "ERROR");
+
+          if (_internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: _internalSpan,
+                message: 'vp9 codec+configuration is not supported',
+                status: StatusCode.error);
+          }
+
+          if (enableShareSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: enableShareSpan,
+                message: 'vp9 codec+configuration is not supported',
+                status: StatusCode.error);
+          }
+          //
+          throw 'desired vp9 codec+configuration is not supported';
+        });
+      } else {
+        try {
+          if (_internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
               span: _internalSpan,
-              message: 'vp9 codec+configuration is not supported',
-              status: StatusCode.error);
-        }
+              status: StatusCode.error,
+              message: 'MediaSoup device not found',
+            );
+          }
 
-        if (enableShareSpan != null) {
-          videoSDKTelemetery!.completeSpan(
+          if (enableShareSpan != null) {
+            videoSDKTelemetery!.completeSpan(
               span: enableShareSpan,
-              message: 'vp9 codec+configuration is not supported',
-              status: StatusCode.error);
+              status: StatusCode.error,
+              message:
+                  'Enable Screenshare Failed \n Mediasoup device not found',
+            );
+          }
+        } catch (e) {}
+
+        _eventEmitter.emit("error", VideoSDKErrors[3013]);
+
+        Map<String, String> attributes = {
+          "error": "Error in enableScreenShare(): Something went wrong.",
+          "errorMessage": "enableScreenShare(): MediaSoup device not found."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3013]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3013]?['code']}  :: ${VideoSDKErrors[3013]?['name']} :: ${VideoSDKErrors[3013]?['message']}");
+        _screenShareInProgress = false;
+        if (!kIsWeb) {
+          if (Platform.isAndroid) {
+            //
+            FlutterForegroundTask.stopService();
+          }
         }
-        //
-        throw 'desired vp9 codec+configuration is not supported';
-      });
+        return;
+      }
 
       try {
         if (_internalSpan != null) {
@@ -1389,16 +1970,55 @@ class Room {
           }
         } catch (error) {}
         //
-        _sendTransport!.produce(
-          track: videoTrack,
-          codecOptions: ProducerCodecOptions(
-            videoGoogleStartBitrate: 1000,
-          ),
-          stream: shareStream,
-          appData: {'share': true},
-          source: 'screen',
-          codec: videoCodec,
-        );
+        if (_sendTransport != null) {
+          _sendTransport!.produce(
+            track: videoTrack,
+            codecOptions: ProducerCodecOptions(
+              videoGoogleStartBitrate: 1000,
+            ),
+            stream: shareStream,
+            appData: {'share': true},
+            source: 'screen',
+            codec: videoCodec,
+          );
+        } else {
+          try {
+            if (producerSpan != null) {
+              videoSDKTelemetery!.completeSpan(
+                  span: producerSpan,
+                  message:
+                      'Screenshare Video Producer could not be Created, _sendTransport is null',
+                  status: StatusCode.error);
+
+              producerSpan = null;
+            }
+          } catch (error) {}
+
+          _eventEmitter.emit("error", VideoSDKErrors[3013]);
+
+          Map<String, String> attributes = {
+            "error": "Error in enableScreenShare(): Something went wrong.",
+            "errorMessage": "enableScreenShare(): _sendTransport is null."
+          };
+          VideoSDKLog.createLog(
+              message: VideoSDKErrors[3013]!['message']!,
+              logLevel: "ERROR",
+              attributes: attributes,
+              dashboardLog: true);
+          print(
+              "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3013]?['code']}  :: ${VideoSDKErrors[3013]?['name']} :: ${VideoSDKErrors[3013]?['message']}");
+          if (shareStream != null) {
+            await shareStream.dispose();
+          }
+          _screenShareInProgress = false;
+          if (!kIsWeb) {
+            if (Platform.isAndroid) {
+              //
+              FlutterForegroundTask.stopService();
+            }
+          }
+          return;
+        }
 
         try {
           if (producerSpan != null) {
@@ -1421,15 +2041,55 @@ class Room {
             }
           } catch (error) {}
 
-          _sendTransport!.produce(
-              track: audioTrack,
-              codecOptions: ProducerCodecOptions(
-                opusStereo: 1,
-                opusDtx: 1,
-              ),
-              stream: shareStream,
-              appData: {'share': true},
-              source: 'screen-audio');
+          if (_sendTransport != null) {
+            _sendTransport!.produce(
+                track: audioTrack,
+                codecOptions: ProducerCodecOptions(
+                  opusStereo: 1,
+                  opusDtx: 1,
+                ),
+                stream: shareStream,
+                appData: {'share': true},
+                source: 'screen-audio');
+          } else {
+            try {
+              if (audioProducerSpan != null) {
+                videoSDKTelemetery!.completeSpan(
+                    span: audioProducerSpan,
+                    message:
+                        'Screenshare Audio Producer could not be Created, _sendTransport is null',
+                    status: StatusCode.error);
+
+                audioProducerSpan = null;
+              }
+            } catch (error) {}
+
+            _eventEmitter.emit("error", VideoSDKErrors[3013]);
+
+            Map<String, String> attributes = {
+              "error": "Error in enableScreenShare(): Something went wrong.",
+              "errorMessage": "enableScreenShare(): _sendTransport is null."
+            };
+            VideoSDKLog.createLog(
+                message: VideoSDKErrors[3013]!['message']!,
+                logLevel: "ERROR",
+                attributes: attributes,
+                dashboardLog: true);
+            print(
+                "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3013]?['code']}  :: ${VideoSDKErrors[3013]?['name']} :: ${VideoSDKErrors[3013]?['message']}");
+
+            if (shareStream != null) {
+              await shareStream.dispose();
+            }
+            if (!kIsWeb) {
+              if (Platform.isAndroid) {
+                //
+                FlutterForegroundTask.stopService();
+              }
+            }
+            _screenShareInProgress = false;
+            return;
+          }
 
           if (audioProducerSpan != null) {
             videoSDKTelemetery!.completeSpan(
@@ -1440,7 +2100,6 @@ class Room {
             audioProducerSpan = null;
           }
         }
-
         if (enableShareSpan != null) {
           videoSDKTelemetery!.completeSpan(
               span: enableShareSpan,
@@ -1454,11 +2113,30 @@ class Room {
               message: 'Enable ScreenShare Failed due to stream null',
               status: StatusCode.error);
         }
+
+        _eventEmitter.emit("error", VideoSDKErrors[3013]);
+
+        Map<String, String> attributes = {
+          "error": "Error in enableScreenShare(): Something went wrong.",
+          "errorMessage": "enableScreenShare(): shareStream is null."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3013]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3013]?['code']}  :: ${VideoSDKErrors[3013]?['name']} :: ${VideoSDKErrors[3013]?['message']}");
+        if (!kIsWeb) {
+          if (Platform.isAndroid) {
+            //
+            FlutterForegroundTask.stopService();
+          }
+        }
+        _screenShareInProgress = false;
+        return;
       }
     } catch (error) {
-      //
-      log('error enable share  error => $error');
-
       //
       _screenShareInProgress = false;
 
@@ -1473,20 +2151,31 @@ class Room {
       if (shareStream != null) {
         await shareStream.dispose();
       }
-      if (error.toString().contains("Permission denied")) {
-        //
-        VideoSDKLog.createLog(
-            message: "Error in enableShare() \n ${error.toString()}",
-            logLevel: "WARN");
-        //
+      if (error.toString().contains("NotAllowedError")) {
         _eventEmitter.emit("error", VideoSDKErrors[3014]);
-      } else {
-        //
+        Map<String, String> attributes = {
+          "error": "Error in enableScreenShare(): Permissions denied."
+        };
         VideoSDKLog.createLog(
-            message: "Error in enableShare() \n ${error.toString()}",
-            logLevel: "ERROR");
-        //
+            message: VideoSDKErrors[3014]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3014]?['code']}  :: ${VideoSDKErrors[3014]?['name']} :: ${VideoSDKErrors[3014]?['message']}");
+      } else {
         _eventEmitter.emit("error", VideoSDKErrors[3013]);
+        Map<String, String> attributes = {
+          "error": "Error in enableScreenShare(): Something went wrong.",
+          "errorMessage": "Error in enableScreenShare(): ${error.toString()}."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3013]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3013]?['code']}  :: ${VideoSDKErrors[3013]?['name']} :: ${VideoSDKErrors[3013]?['message']}");
       }
 
       if (trackSpan != null) {
@@ -1495,7 +2184,6 @@ class Room {
             message: 'Track Generation Failed',
             status: StatusCode.error);
       }
-
       if (producerSpan != null) {
         videoSDKTelemetery!.completeSpan(
             span: producerSpan,
@@ -1521,6 +2209,12 @@ class Room {
 
   //
   Future<void> disableScreenShare() async {
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in disableScreenShare(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      return;
+    }
     Span? disableShareSpan;
     try {
       if (videoSDKTelemetery != null) {
@@ -1559,9 +2253,11 @@ class Room {
 
         try {
           //
-          await _webSocket!.socket.request('closeProducer', {
-            'producerId': screenShareAudioId,
-          });
+          if (_webSocket != null) {
+            await _webSocket!.socket.request('closeProducer', {
+              'producerId': screenShareAudioId,
+            });
+          }
 
           if (audioProducerTrack != null) {
             videoSDKTelemetery!.completeSpan(
@@ -1572,10 +2268,18 @@ class Room {
             audioProducerTrack = null;
           }
         } catch (error) {
-          //
+          Map<String, String> attributes = {
+            "error": "Error in disableScreenShare() :: Something went wrong.",
+            "errorMessage": "Error in disableScreenShare(): ${error.toString()}"
+          };
           VideoSDKLog.createLog(
-              message: "Error in audio disableShare() \n ${error.toString()}",
-              logLevel: "ERROR");
+              message:
+                  "Something went wrong, and the screenshare audio could not be disabled. Please try again.",
+              logLevel: "ERROR",
+              attributes: attributes,
+              dashboardLog: true);
+          print(
+              "An error occurred in disableScreenShare()): Something went wrong, and the screenshare audio could not be disabled. Please try again.");
 
           if (audioProducerTrack != null) {
             videoSDKTelemetery!.completeSpan(
@@ -1585,8 +2289,6 @@ class Room {
 
             audioProducerTrack = null;
           }
-          //
-          log("disableShare error => $error");
         }
       }
 
@@ -1610,9 +2312,11 @@ class Room {
 
       try {
         //
-        await _webSocket!.socket.request('closeProducer', {
-          'producerId': screenShareId,
-        });
+        if (_webSocket != null) {
+          await _webSocket!.socket.request('closeProducer', {
+            'producerId': screenShareId,
+          });
+        }
 
         if (producerTrack != null) {
           videoSDKTelemetery!.completeSpan(
@@ -1631,9 +2335,18 @@ class Room {
         }
       } catch (error) {
         //
+        Map<String, String> attributes = {
+          "error": "Error in disableScreenShare() :: Something went wrong.",
+          "errorMessage": "Error in disableScreenShare(): ${error.toString()}"
+        };
         VideoSDKLog.createLog(
-            message: "Error in disableShare() \n ${error.toString()}",
-            logLevel: "ERROR");
+            message:
+                "Error in disableScreenShare(): Something went wrong, and the screenshare could not be disabled. Please try again.",
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in disableScreenShare()): Something went wrong, and the screenshare could not be disabled. Please try again.");
 
         if (producerTrack != null) {
           videoSDKTelemetery!.completeSpan(
@@ -1651,7 +2364,6 @@ class Room {
               status: StatusCode.error);
         }
         //
-        log("disableShare error => $error");
       } finally {
         _closeForegroundService();
 
@@ -1666,7 +2378,18 @@ class Room {
             status: StatusCode.error);
       }
       //
-      log("Screenshare is not enabled !!");
+      Map<String, String> attributes = {
+        "error":
+            "Error in disableScreenShare() :: Screenshare is already disabled."
+      };
+      VideoSDKLog.createLog(
+          message:
+              "Attempted to call disableScreenShare() while the screenshare is already disabled",
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in disableScreenShare(): Attempted to call disableScreenShare() while the screenshare is already disabled");
     }
   }
 
@@ -1757,6 +2480,7 @@ class Room {
         VideoSDKLog.peerId = localParticipant.id;
         VideoSDKLog.logsConfig = observability['logs'];
         VideoSDKLog.jwtKey = observability['jwt'];
+        VideoSDKLog.debugMode = _debugMode;
 
         // open-telemeetry
         videoSDKTelemetery = VideoSDKTelemetery(
@@ -1778,18 +2502,51 @@ class Room {
     } catch (err) {
       //
       VideoSDKLog.createLog(
-          message: "error while getting baseUrl \n ${err.toString()}",
+          message: "Error while getting baseUrl \n ${err.toString()}",
           logLevel: "ERROR");
 
-      //
-      log(err.toString());
-      //
+      final error = <String, dynamic>{};
+
+      error.addAll(<String, dynamic>{
+        "code": "3023",
+        "name": "ERROR_JOINING_MEETING",
+        "message":
+            "An error occured while joining the meeting :  ${err.toString()}"
+      });
+
+      _eventEmitter.emit("error", error);
+
+      print(
+          "An error occured while joining the meeting : VIDEOSDK ERROR :: 3023  :: ERROR_JOINING_MEETING :: ${err.toString()}");
+
       throw "Error while getting baseUrl";
     }
 
     // send trace roomConfig
     try {
       deviceInfo = await VideoSDK.getDeviceInfo();
+
+      final logDeviceInfo = <String, dynamic>{};
+      if (deviceInfo.containsKey("browserUserAgent")) {
+        logDeviceInfo.addAll(<String, dynamic>{
+          "browserName": deviceInfo['browserUserAgent']['browser']['name'],
+          "browserVersion": deviceInfo['browserUserAgent']['browser']
+              ['version'],
+          "osName": deviceInfo['browserUserAgent']['os']['name'],
+          "osVersion": deviceInfo['browserUserAgent']['os']['type'],
+          "platform": deviceInfo['platform']
+        });
+      }
+      if (deviceInfo.containsKey("deviceUserAgent")) {
+        logDeviceInfo.addAll(<String, dynamic>{
+          "brand": deviceInfo['deviceUserAgent']['brand'],
+          "model": deviceInfo['deviceUserAgent']['modelName'],
+          "osVersion": deviceInfo['deviceUserAgent']['osVersion'],
+          "platform": deviceInfo['platform']
+        });
+      }
+
+      VideoSDKLog.deviceInfo = logDeviceInfo;
       _joinSpan = videoSDKTelemetery!.trace(
         spanName: 'Join() Calling',
         span: null,
@@ -1815,7 +2572,11 @@ class Room {
                 'selectedVideoInput', _selectedVideoInput!.label),
         ],
       );
-    } catch (error) {}
+    } catch (error) {
+      VideoSDKLog.createLog(
+          message: "Error while getting deviceInfo \n ${error.toString()}",
+          logLevel: "ERROR");
+    }
 
     //
     _webSocket = WebSocket(
@@ -1832,7 +2593,11 @@ class Room {
         );
       }
     } catch (error) {
-      log("error in webSocket OnConnecting $error");
+      VideoSDKLog.createLog(
+          message: "Error in webSocket OnConnecting \n ${error.toString()}",
+          logLevel: "ERROR");
+
+      log("Error in webSocket OnConnecting $error");
     }
 
     //
@@ -1844,7 +2609,10 @@ class Room {
           );
         }
       } catch (error) {
-        log("error in webSocket onOpen $error");
+        VideoSDKLog.createLog(
+            message: "Error in webSocket onOpen \n ${error.toString()}",
+            logLevel: "ERROR");
+        log("Error in webSocket onOpen $error");
       }
 
       _requestEntry();
@@ -1860,7 +2628,10 @@ class Room {
               message: 'WebSocket Connection Failed');
         }
       } catch (error) {
-        log("error in webSocket onFail $error");
+        VideoSDKLog.createLog(
+            message: "Error in webSocket onFail \n ${error.toString()}",
+            logLevel: "ERROR");
+        log("Error in webSocket onFail $error");
       }
     };
 
@@ -1873,7 +2644,10 @@ class Room {
           );
         }
       } catch (error) {
-        log("error in webSocket onDisconnected $error");
+        VideoSDKLog.createLog(
+            message: "Error in webSocket onDisconnected \n ${error.toString()}",
+            logLevel: "ERROR");
+        log("Error in webSocket onDisconnected $error");
       }
 
       if (_micProducer != null) {
@@ -1907,7 +2681,10 @@ class Room {
           );
         }
       } catch (error) {
-        log("error in webSocket onClose $error");
+        VideoSDKLog.createLog(
+            message: "Error in webSocket onClose \n ${error.toString()}",
+            logLevel: "ERROR");
+        log("Error in webSocket onClose $error");
       }
       //
       _close();
@@ -2386,7 +3163,6 @@ class Room {
 
         case "consumerLayersChanged":
           {
-            log("consumerLayersChanged server");
             String consumerId = notification['data']['consumerId'];
             int spatialLayer = notification['data']['spatialLayer'] ?? -1;
             int temporalLayer = notification['data']['temporalLayer'] ?? -1;
@@ -2462,6 +3238,7 @@ class Room {
             var id = notification['data']['id'];
             var decision = notification['data']['decision'];
             var sessionId = notification['data']['sessionId'];
+            VideoSDKLog.sessionId = sessionId;
 
             Span? entryRespondedSpan;
             try {
@@ -2716,6 +3493,19 @@ class Room {
             break;
           }
 
+        case 'whiteboardStarted':
+          {
+            _eventEmitter.emit(
+                'whiteboard-started', notification['data']['url']);
+            break;
+          }
+
+        case 'whiteboardStopped':
+          {
+            _eventEmitter.emit('whiteboard-stopped');
+            break;
+          }
+
         case "activeSpeaker":
           {
             String? peerId = notification['data']['peerId'];
@@ -2773,7 +3563,7 @@ class Room {
                 ],
               );
             }
-            handleRemoteRestartIce(transportId, iceParameters, restartIceSpan);
+            _handleRemoteRestartIce(transportId, iceParameters, restartIceSpan);
             break;
           }
 
@@ -2797,18 +3587,144 @@ class Room {
 
         case 'transcriptionText':
           {
-            _eventEmitter.emit("transcription-text", notification['data']);
+            var data = notification['data'];
+            String participantId = data["participantId"];
+            String participantName = data["participantName"];
+            String text = data["text"];
+            int timestamp = data["timestamp"];
+            String type = data["type"];
+
+            TranscriptionText transcriptionText = TranscriptionText(
+                participantId: participantId,
+                participantName: participantName,
+                text: text,
+                timestamp: timestamp,
+                type: type);
+
+            _eventEmitter.emit("transcription-text", transcriptionText);
             break;
           }
+
+        case 'addCharacter':
+          {
+            final Map<String, dynamic> newCharacter =
+                Map<String, dynamic>.from(notification['data']);
+
+            Span? characterSpan;
+
+            if (videoSDKTelemetery != null) {
+              characterSpan = videoSDKTelemetery!.trace(
+                spanName:
+                    'Protoo Noti: newCharacter for ${newCharacter.toString()}',
+                attributes: [
+                  Attribute.fromString('newCharacter', newCharacter.toString()),
+                ],
+              );
+            }
+
+            _addCharacterPeer(newCharacter, characterSpan);
+
+            if (characterSpan != null) {
+              videoSDKTelemetery!.completeSpan(
+                message:
+                    'Protoo Noti: newCharacter for ${newCharacter.toString()} Completed',
+                status: StatusCode.ok,
+                span: characterSpan,
+              );
+            }
+
+            _eventEmitter.emit("ADD_CHARACTER", notification['data']);
+
+            if (videoSDKTelemetery != null) {
+              videoSDKTelemetery!.traceAutoComplete(
+                  spanName: 'Emitted ADD_CHARACTER : ${notification['data']}',
+                  attributes: [
+                    Attribute.fromString(
+                        'data', notification['data'].toString())
+                  ],
+                  status: StatusCode.ok);
+            }
+
+            break;
+          }
+
+        case 'removeCharacter':
+          {
+            String id = notification['data']['id'];
+
+            Span? characterRemovedSpan;
+
+            if (videoSDKTelemetery != null) {
+              characterRemovedSpan = videoSDKTelemetery!.trace(
+                spanName: 'Protoo Noti: Character Removed for $id',
+              );
+            }
+
+            __removePeer(id, characterRemovedSpan);
+
+            if (characterRemovedSpan != null) {
+              videoSDKTelemetery!.completeSpan(
+                message: 'Protoo Noti: Character Removed for $id Completed',
+                span: characterRemovedSpan,
+                status: StatusCode.ok,
+              );
+            }
+
+            _eventEmitter.emit("REMOVE_CHARACTER", notification['data']);
+
+            if (videoSDKTelemetery != null) {
+              videoSDKTelemetery!.traceAutoComplete(
+                  spanName:
+                      'Emitted REMOVE_CHARACTER : ${notification['data']}',
+                  attributes: [
+                    Attribute.fromString(
+                        'data', notification['data'].toString())
+                  ],
+                  status: StatusCode.ok);
+            }
+            break;
+          }
+        case "characterStateChanged":
+          {
+            _eventEmitter.emit("CHARACTER_STATE_CHANGED", notification['data']);
+            videoSDKTelemetery!.traceAutoComplete(
+                spanName:
+                    'Emitted CHARACTER_STATE_CHANGED, status : : ${notification['data']['status']}',
+                attributes: [
+                  Attribute.fromString('data', notification['data'].toString())
+                ],
+                status: StatusCode.ok);
+
+            break;
+          }
+        case 'characterMessage':
+          {
+            _eventEmitter.emit("CHARACTER_MESSAGE",
+                CharacterMessage.fromJson(notification['data']));
+
+            break;
+          }
+
         default:
           break;
       }
     };
   }
 
-  void handleRemoteRestartIce(String transportId, IceParameters iceParameters,
+  void _handleRemoteRestartIce(String transportId, IceParameters iceParameters,
       Span? restartIceSpan) async {
     try {
+      if (_webSocket == null) {
+        if (restartIceSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+            span: restartIceSpan,
+            status: StatusCode.error,
+            message: "iceRestart Failed Websocket was null",
+          );
+        }
+        return;
+      }
+
       if (_sendTransport?.id == transportId) {
         _sendTransport!.restartIce(iceParameters);
         _webSocket!.socket
@@ -2833,7 +3749,7 @@ class Room {
           message: "Error in restartICE() \n ${error.toString()}",
           logLevel: "ERROR");
 
-      log("error in iceRestart $error");
+      log("Error in iceRestart $error");
 
       if (restartIceSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -2859,6 +3775,9 @@ class Room {
 
 //
   Future<void> _joinRoom() async {
+    if (_webSocket == null) {
+      return;
+    }
     try {
       _device = Device();
 
@@ -2886,11 +3805,7 @@ class Room {
                 'Router Capabilities Loaded ${routerRtpCapabilities.toString()}',
             status: StatusCode.ok);
       }
-    } catch (error) {
-      print("error here $error");
-    }
 
-    try {
       if ((_device!.canProduce(RTCRtpMediaType.RTCRtpMediaTypeAudio) == true ||
               _device!.canProduce(RTCRtpMediaType.RTCRtpMediaTypeVideo) ==
                   true) &&
@@ -2951,7 +3866,7 @@ class Room {
         }
       }
 
-      await getDefaultDevices(_defaultCameraIndex);
+      await _getDefaultDevices(_defaultCameraIndex);
 
       try {
         if (_produce) {
@@ -3060,351 +3975,394 @@ class Room {
   }
 
   Future<void> _createSendTransport({Span? parentSpan}) async {
-    log("Send Transport $_produce");
-    if (_produce) {
-      Span? sendTransportSpan;
-      try {
-        if (videoSDKTelemetery != null && parentSpan != null) {
-          sendTransportSpan = videoSDKTelemetery!
-              .trace(spanName: 'Create Send Transport', span: parentSpan);
-        }
-      } catch (error) {}
-
-      Map transportInfo =
-          await _webSocket!.socket.request('createWebRtcTransport', {
-        'preferredProtocol': _preferredProtocol,
-        'producing': true,
-        'consuming': false,
-        'sctpCapabilities': _device!.sctpCapabilities.toMap(),
-      });
-
-      _sendTransport = _device!.createSendTransportFromMap(
-        transportInfo,
-        producerCallback: _producerCallback,
-        iceServers: _iceServers,
-      );
-
-      _sendTransport!.on('connect', (Map data) {
-        try {
-          if (videoSDKTelemetery != null) {
-            videoSDKTelemetery!.traceAutoComplete(
-                spanName:
-                    'this._sendTransport `connect` Event : Transport is about to establish the ICE+DTLS connection');
-          }
-        } catch (error) {}
-
-        //
-        _webSocket!.socket
-            .request('connectWebRtcTransport', {
-              'transportId': _sendTransport!.id,
-              'dtlsParameters': data['dtlsParameters'].toMap(),
-            })
-            .then(data['callback'])
-            .catchError((error) {
-              data['callback'];
-              //
-              VideoSDKLog.createLog(
-                  message:
-                      "Error in sendTransport connect \n ${error.toString()}",
-                  logLevel: "ERROR");
-            });
-      });
-
-      _sendTransport!.on('produce', (Map data) async {
-        try {
-          if (videoSDKTelemetery != null) {
-            videoSDKTelemetery!.traceAutoComplete(
-                spanName:
-                    'this._sendTransport `produce` Event : Transmit information about a new producer');
-          }
-        } catch (error) {}
-
-        try {
-          Map response = await _webSocket!.socket.request(
-            'produce',
-            {
-              'transportId': _sendTransport!.id,
-              'kind': data['kind'],
-              'rtpParameters': data['rtpParameters'].toMap(),
-              if (data['appData'] != null)
-                'appData': Map<String, dynamic>.from(data['appData'])
-            },
-          );
-
-          data['callback'](response['id']);
-        } catch (error) {
-          data['errback'](error);
-          //
-          VideoSDKLog.createLog(
-              message: "Error in sendTransport produce \n ${error.toString()}",
-              logLevel: "ERROR");
-        }
-      });
-
-      _sendTransport!.on('producedata', (data) async {
-        try {
-          Map response = await _webSocket!.socket.request('produceData', {
-            'transportId': _sendTransport!.id,
-            'sctpStreamParameters': data['sctpStreamParameters'].toMap(),
-            'label': data['label'],
-            'protocol': data['protocol'],
-            'appData': data['appData'],
-          });
-
-          data['callback'](response['id']);
-        } catch (error) {
-          data['errback'](error);
-          //
-          VideoSDKLog.createLog(
-              message:
-                  "Error in sendTransport produceData \n ${error.toString()}",
-              logLevel: "ERROR");
-        }
-      });
-
-      _sendTransport!.on('connectionstatechange', (connectionState) {
-        try {
-          if (videoSDKTelemetery != null) {
-            videoSDKTelemetery!.traceAutoComplete(
-                spanName:
-                    '_sendTransport Event connectionStateChange $connectionState');
-          }
-        } catch (error) {}
-
-        //
-        if (connectionState['connectionState'] == 'failed') {
-          _close("Network Error");
-        }
-      });
-
-      var reportCounter = 0;
-      Probe probe =
-          _metricsCollector!.addNewProbe(_sendTransport!, "sendTransport");
-      _eventEmitter.on("stats-collected-${probe.id}", (report) {
-        try {
-          if (_stats['producerStats'] == null) {
-            _stats['producerStats'] = {};
-          }
-          if (_stats['producerStats']['audio'] == null) {
-            _stats['producerStats']['audio'] = [];
-          }
-          _latestStats[_micProducer?.id] = [];
-          report['audio'].forEach((stat) {
-            if (stat['trackId'] == _micProducer?.track.id) {
-              _latestStats[_micProducer?.id].add(stat);
-              if (reportCounter % 5 == 0) {
-                _stats['producerStats']['audio'].add(stat);
-              }
-            }
-          });
-          if (_stats['producerStats']['video'] == null) {
-            _stats['producerStats']['video'] = [];
-          }
-          if (_stats['producerStats']['share'] == null) {
-            _stats['producerStats']['share'] = [];
-          }
-          _latestStats[_cameraProducer?.id] = [];
-          _latestStats[_screenshareProducer?.id] = [];
-          report['video'].forEach((stat) {
-            if (stat['trackId'] == _cameraProducer?.track.id) {
-              _latestStats[_cameraProducer?.id].add(stat);
-            } else if (stat['trackId'] == _screenshareProducer?.track.id) {
-              _latestStats[_screenshareProducer?.id].add(stat);
-            }
-          });
-
-          if (reportCounter % 5 == 0 && _cameraProducer != null) {
-            _stats['producerStats']['video'].add({
-              'timestamp': DateTime.now().millisecondsSinceEpoch,
-              'stats': _latestStats[_cameraProducer?.id],
-            });
-          }
-          if (reportCounter % 5 == 0 && _screenshareProducer != null) {
-            _stats['producerStats']['share'].add({
-              'timestamp': DateTime.now().millisecondsSinceEpoch,
-              'stats': _latestStats[_screenshareProducer?.id],
-            });
-          }
-          reportCounter++;
-        } catch (error) {
-          //
-          VideoSDKLog.createLog(
-              message: "Error in stats-collected \n ${error.toString()}",
-              logLevel: "DEBUG");
-
-          //
-          log("PART ERRO :: ${error.toString()}");
-        }
-      });
-      probe.start();
-      _sendTransport!.observer.on('close', () {
-        probe.stop();
-        _metricsCollector!.removeExistingProbe(probe);
-      });
-
-      if (sendTransportSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-          span: sendTransportSpan,
-          message: 'Send Transport Created Successfully',
-          status: StatusCode.ok,
-        );
-      }
+    if (_webSocket == null) {
+      return;
     }
-  }
 
-  Future<void> _createReceiveTransport({Span? parentSpan}) async {
-    if (_consume) {
-      Span? receiveTransportSpan;
-      try {
-        if (videoSDKTelemetery != null) {
-          receiveTransportSpan = videoSDKTelemetery!
-              .trace(spanName: 'Create Receive Transport', span: parentSpan);
-        }
-      } catch (error) {}
+    log("Send Transport $_produce");
+    Span? sendTransportSpan;
+    try {
+      if (_produce) {
+        try {
+          if (videoSDKTelemetery != null && parentSpan != null) {
+            sendTransportSpan = videoSDKTelemetery!
+                .trace(spanName: 'Create Send Transport', span: parentSpan);
+          }
+        } catch (error) {}
 
-      Map transportInfo = await _webSocket!.socket.request(
-        'createWebRtcTransport',
-        {
+        Map transportInfo =
+            await _webSocket!.socket.request('createWebRtcTransport', {
           'preferredProtocol': _preferredProtocol,
-          'producing': false,
-          'consuming': true,
+          'producing': true,
+          'consuming': false,
           'sctpCapabilities': _device!.sctpCapabilities.toMap(),
-        },
-      );
+        });
 
-      _recvTransport = _device!.createRecvTransportFromMap(
-        transportInfo,
-        consumerCallback: _consumerCallback,
-        iceServers: _iceServers,
-      );
+        _sendTransport = _device!.createSendTransportFromMap(
+          transportInfo,
+          producerCallback: _producerCallback,
+          iceServers: _iceServers,
+        );
 
-      _recvTransport!.on(
-        'connect',
-        (data) {
+        _sendTransport!.on('connect', (Map data) {
           try {
             if (videoSDKTelemetery != null) {
               videoSDKTelemetery!.traceAutoComplete(
                   spanName:
-                      'this._recvTransport `connect` Event : Receive Transport is about to establish the ICE+DTLS connection');
+                      'this._sendTransport `connect` Event : Transport is about to establish the ICE+DTLS connection');
             }
           } catch (error) {}
 
           //
           _webSocket!.socket
-              .request(
-                'connectWebRtcTransport',
-                {
-                  'transportId': _recvTransport!.id,
-                  'dtlsParameters': data['dtlsParameters'].toMap(),
-                },
-              )
+              .request('connectWebRtcTransport', {
+                'transportId': _sendTransport!.id,
+                'dtlsParameters': data['dtlsParameters'].toMap(),
+              })
               .then(data['callback'])
               .catchError((error) {
                 data['callback'];
                 //
                 VideoSDKLog.createLog(
                     message:
-                        "Error in receiveTransport connect \n ${error.toString()}",
+                        "Error in sendTransport connect \n ${error.toString()}",
                     logLevel: "ERROR");
               });
-        },
-      );
+        });
 
-      _recvTransport!.on('connectionstatechange', (connectionState) {
+        _sendTransport!.on('produce', (Map data) async {
+          try {
+            if (videoSDKTelemetery != null) {
+              videoSDKTelemetery!.traceAutoComplete(
+                  spanName:
+                      'this._sendTransport `produce` Event : Transmit information about a new producer');
+            }
+          } catch (error) {}
+
+          try {
+            Map response = await _webSocket!.socket.request(
+              'produce',
+              {
+                'transportId': _sendTransport!.id,
+                'kind': data['kind'],
+                'rtpParameters': data['rtpParameters'].toMap(),
+                if (data['appData'] != null)
+                  'appData': Map<String, dynamic>.from(data['appData'])
+              },
+            );
+
+            data['callback'](response['id']);
+          } catch (error) {
+            data['errback'](error);
+            //
+            VideoSDKLog.createLog(
+                message:
+                    "Error in sendTransport produce \n ${error.toString()}",
+                logLevel: "ERROR");
+          }
+        });
+
+        _sendTransport!.on('producedata', (data) async {
+          try {
+            Map response = await _webSocket!.socket.request('produceData', {
+              'transportId': _sendTransport!.id,
+              'sctpStreamParameters': data['sctpStreamParameters'].toMap(),
+              'label': data['label'],
+              'protocol': data['protocol'],
+              'appData': data['appData'],
+            });
+
+            data['callback'](response['id']);
+          } catch (error) {
+            data['errback'](error);
+            //
+            VideoSDKLog.createLog(
+                message:
+                    "Error in sendTransport produceData \n ${error.toString()}",
+                logLevel: "ERROR");
+          }
+        });
+
+        _sendTransport!.on('connectionstatechange', (connectionState) {
+          try {
+            if (videoSDKTelemetery != null) {
+              videoSDKTelemetery!.traceAutoComplete(
+                  spanName:
+                      '_sendTransport Event connectionStateChange $connectionState');
+            }
+          } catch (error) {}
+
+          //
+          if (connectionState['connectionState'] == 'failed') {
+            _close("Network Error");
+          }
+        });
+
+        var reportCounter = 0;
+        Probe probe =
+            _metricsCollector!.addNewProbe(_sendTransport!, "sendTransport");
+        _eventEmitter.on("stats-collected-${probe.id}", (report) {
+          try {
+            if (_stats['producerStats'] == null) {
+              _stats['producerStats'] = {};
+            }
+            if (_stats['producerStats']['audio'] == null) {
+              _stats['producerStats']['audio'] = [];
+            }
+            _latestStats[_micProducer?.id] = [];
+            report['audio'].forEach((stat) {
+              if (stat['trackId'] == _micProducer?.track.id) {
+                _latestStats[_micProducer?.id].add(stat);
+                if (reportCounter % 5 == 0) {
+                  _stats['producerStats']['audio'].add(stat);
+                }
+              }
+            });
+            if (_stats['producerStats']['video'] == null) {
+              _stats['producerStats']['video'] = [];
+            }
+            if (_stats['producerStats']['share'] == null) {
+              _stats['producerStats']['share'] = [];
+            }
+            _latestStats[_cameraProducer?.id] = [];
+            _latestStats[_screenshareProducer?.id] = [];
+            report['video'].forEach((stat) {
+              if (stat['trackId'] == _cameraProducer?.track.id) {
+                _latestStats[_cameraProducer?.id].add(stat);
+              } else if (stat['trackId'] == _screenshareProducer?.track.id) {
+                _latestStats[_screenshareProducer?.id].add(stat);
+              }
+            });
+
+            if (reportCounter % 5 == 0 && _cameraProducer != null) {
+              _stats['producerStats']['video'].add({
+                'timestamp': DateTime.now().millisecondsSinceEpoch,
+                'stats': _latestStats[_cameraProducer?.id],
+              });
+            }
+            if (reportCounter % 5 == 0 && _screenshareProducer != null) {
+              _stats['producerStats']['share'].add({
+                'timestamp': DateTime.now().millisecondsSinceEpoch,
+                'stats': _latestStats[_screenshareProducer?.id],
+              });
+            }
+            reportCounter++;
+          } catch (error) {
+            //
+            VideoSDKLog.createLog(
+                message: "Error in stats-collected \n ${error.toString()}",
+                logLevel: "DEBUG");
+
+            //
+            log("PART ERRO :: ${error.toString()}");
+          }
+        });
+        probe.start();
+        _sendTransport!.observer.on('close', () {
+          probe.stop();
+          _metricsCollector!.removeExistingProbe(probe);
+        });
+
+        if (sendTransportSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+            span: sendTransportSpan,
+            message: 'Send Transport Created Successfully',
+            status: StatusCode.ok,
+          );
+        }
+      }
+    } catch (error) {
+      VideoSDKLog.createLog(
+          message: "Error in _createSendTransport ${error.toString()}",
+          logLevel: "ERROR");
+
+      if (sendTransportSpan != null) {
+        videoSDKTelemetery!.completeSpan(
+          span: sendTransportSpan,
+          message: 'Send Transport failed with error: ${error.toString()}',
+          status: StatusCode.error,
+        );
+      }
+    }
+  }
+
+  Future<void> _createReceiveTransport({Span? parentSpan}) async {
+    if (_webSocket == null) {
+      return;
+    }
+    Span? receiveTransportSpan;
+    try {
+      if (_consume) {
         try {
           if (videoSDKTelemetery != null) {
-            videoSDKTelemetery!.traceAutoComplete(
-                spanName:
-                    '_recvTransport Event connectionStateChange $connectionState');
+            receiveTransportSpan = videoSDKTelemetery!
+                .trace(spanName: 'Create Receive Transport', span: parentSpan);
           }
         } catch (error) {}
 
-        if (connectionState['connectionState'] == 'failed') {
-          _close("Network Error");
+        Map transportInfo = await _webSocket!.socket.request(
+          'createWebRtcTransport',
+          {
+            'preferredProtocol': _preferredProtocol,
+            'producing': false,
+            'consuming': true,
+            'sctpCapabilities': _device!.sctpCapabilities.toMap(),
+          },
+        );
+
+        _recvTransport = _device!.createRecvTransportFromMap(
+          transportInfo,
+          consumerCallback: _consumerCallback,
+          iceServers: _iceServers,
+        );
+
+        _recvTransport!.on(
+          'connect',
+          (data) {
+            try {
+              if (videoSDKTelemetery != null) {
+                videoSDKTelemetery!.traceAutoComplete(
+                    spanName:
+                        'this._recvTransport `connect` Event : Receive Transport is about to establish the ICE+DTLS connection');
+              }
+            } catch (error) {}
+
+            //
+            _webSocket!.socket
+                .request(
+                  'connectWebRtcTransport',
+                  {
+                    'transportId': _recvTransport!.id,
+                    'dtlsParameters': data['dtlsParameters'].toMap(),
+                  },
+                )
+                .then(data['callback'])
+                .catchError((error) {
+                  data['callback'];
+                  //
+                  VideoSDKLog.createLog(
+                      message:
+                          "Error in receiveTransport connect \n ${error.toString()}",
+                      logLevel: "ERROR");
+                });
+          },
+        );
+
+        _recvTransport!.on('connectionstatechange', (connectionState) {
+          try {
+            if (videoSDKTelemetery != null) {
+              videoSDKTelemetery!.traceAutoComplete(
+                  spanName:
+                      '_recvTransport Event connectionStateChange $connectionState');
+            }
+          } catch (error) {}
+
+          if (connectionState['connectionState'] == 'failed') {
+            _close("Network Error");
+          }
+        });
+
+        var reportCounter = 0;
+        Probe probe =
+            _metricsCollector!.addNewProbe(_recvTransport!, "transport");
+        _eventEmitter.on("stats-collected-${probe.id}", (report) {
+          report['audio'].forEach((stat) {
+            Consumer? consumer = _recvTransport?.consumers[stat['trackId']];
+            if (consumer != null) {
+              var consumerType = consumer.appData['share'] == true
+                  ? consumer.kind == "audio"
+                      ? "shareAudio"
+                      : "share"
+                  : consumer.kind;
+              if (_stats['consumerStats'] == null) {
+                _stats['consumerStats'] = {};
+              }
+              if (_stats['consumerStats'][consumer.peerId] == null) {
+                _stats['consumerStats'][consumer.peerId] = {};
+              }
+              if (_stats['consumerStats'][consumer.peerId][consumerType] ==
+                  null) {
+                _stats['consumerStats'][consumer.peerId][consumerType] = [];
+              }
+              if (stat['trackId'] == consumer.id) {
+                _latestStats[consumer.id] = [];
+
+                _latestStats[consumer.id].add(stat);
+                if (reportCounter % 5 == 0) {
+                  _stats['consumerStats'][consumer.peerId][consumerType]
+                      .add(stat);
+                }
+              }
+            }
+          });
+          report['video'].forEach((stat) {
+            Consumer? consumer = _recvTransport?.consumers[stat['trackId']];
+            if (consumer != null) {
+              var consumerType = consumer.appData['share'] == true
+                  ? consumer.kind == "audio"
+                      ? "shareAudio"
+                      : "share"
+                  : consumer.kind;
+              if (_stats['consumerStats'] == null) {
+                _stats['consumerStats'] = {};
+              }
+              if (_stats['consumerStats'][consumer.peerId] == null) {
+                _stats['consumerStats'][consumer.peerId] = {};
+              }
+              if (_stats['consumerStats'][consumer.peerId][consumerType] ==
+                  null) {
+                _stats['consumerStats'][consumer.peerId][consumerType] = [];
+              }
+              if (stat['trackId'] == consumer.id) {
+                _latestStats[consumer.id] = [];
+
+                _latestStats[consumer.id].add(stat);
+                if (reportCounter % 5 == 0) {
+                  _stats['consumerStats'][consumer.peerId][consumerType]
+                      .add(stat);
+                }
+              }
+            }
+          });
+          reportCounter++;
+        });
+        probe.start();
+        _recvTransport?.observer.on('close', () {
+          probe.stop();
+          _metricsCollector!.removeExistingProbe(probe);
+        });
+
+        if (receiveTransportSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+            span: receiveTransportSpan,
+            message: 'Receive Transport Created Successfully',
+            status: StatusCode.ok,
+          );
         }
-      });
-
-      var reportCounter = 0;
-      Probe probe =
-          _metricsCollector!.addNewProbe(_recvTransport!, "transport");
-      _eventEmitter.on("stats-collected-${probe.id}", (report) {
-        report['audio'].forEach((stat) {
-          Consumer? consumer = _recvTransport?.consumers[stat['trackId']];
-          if (consumer != null) {
-            var consumerType = consumer.appData['share'] == true
-                ? consumer.kind == "audio"
-                    ? "shareAudio"
-                    : "share"
-                : consumer.kind;
-            if (_stats['consumerStats'] == null) {
-              _stats['consumerStats'] = {};
-            }
-            if (_stats['consumerStats'][consumer.peerId] == null) {
-              _stats['consumerStats'][consumer.peerId] = {};
-            }
-            if (_stats['consumerStats'][consumer.peerId][consumerType] ==
-                null) {
-              _stats['consumerStats'][consumer.peerId][consumerType] = [];
-            }
-            if (stat['trackId'] == consumer.id) {
-              _latestStats[consumer.id] = [];
-
-              _latestStats[consumer.id].add(stat);
-              if (reportCounter % 5 == 0) {
-                _stats['consumerStats'][consumer.peerId][consumerType]
-                    .add(stat);
-              }
-            }
-          }
-        });
-        report['video'].forEach((stat) {
-          Consumer? consumer = _recvTransport?.consumers[stat['trackId']];
-          if (consumer != null) {
-            var consumerType = consumer.appData['share'] == true
-                ? consumer.kind == "audio"
-                    ? "shareAudio"
-                    : "share"
-                : consumer.kind;
-            if (_stats['consumerStats'] == null) {
-              _stats['consumerStats'] = {};
-            }
-            if (_stats['consumerStats'][consumer.peerId] == null) {
-              _stats['consumerStats'][consumer.peerId] = {};
-            }
-            if (_stats['consumerStats'][consumer.peerId][consumerType] ==
-                null) {
-              _stats['consumerStats'][consumer.peerId][consumerType] = [];
-            }
-            if (stat['trackId'] == consumer.id) {
-              _latestStats[consumer.id] = [];
-
-              _latestStats[consumer.id].add(stat);
-              if (reportCounter % 5 == 0) {
-                _stats['consumerStats'][consumer.peerId][consumerType]
-                    .add(stat);
-              }
-            }
-          }
-        });
-        reportCounter++;
-      });
-      probe.start();
-      _recvTransport?.observer.on('close', () {
-        probe.stop();
-        _metricsCollector!.removeExistingProbe(probe);
-      });
+      }
+    } catch (error) {
+      VideoSDKLog.createLog(
+          message: "Error in receiveTransport ${error.toString()}",
+          logLevel: "ERROR");
 
       if (receiveTransportSpan != null) {
         videoSDKTelemetery!.completeSpan(
           span: receiveTransportSpan,
-          message: 'Receive Transport Created Successfully',
-          status: StatusCode.ok,
+          message: 'Receive Transport failed with error: ${error.toString()}',
+          status: StatusCode.error,
         );
       }
     }
   }
 
   void end() {
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in end(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+
+      return;
+    }
     if (_closed) {
       return;
     }
@@ -3418,6 +4376,13 @@ class Room {
   }
 
   void leave() {
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in leave(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+
+      return;
+    }
     if (videoSDKTelemetery != null) {
       videoSDKTelemetery!.traceAutoComplete(
         spanName: 'leave() method called',
@@ -3478,7 +4443,7 @@ class Room {
     _sendTransport?.close();
     _recvTransport?.close();
 
-    if (closeSpan != null) {
+    if (closeSpan != null && videoSDKTelemetery != null) {
       videoSDKTelemetery!.completeSpan(
           span: closeSpan, status: StatusCode.ok, message: 'Closed Trasnport');
     }
@@ -3489,12 +4454,12 @@ class Room {
         videoSDKTelemetery!.traceAutoComplete(
           spanName: 'Emitted MEETING_LEFT Event',
         );
-      }
-      videoSDKTelemetery!.traceAutoComplete(
-        spanName: 'Meeting is in CLOSED State',
-      );
+        videoSDKTelemetery!.traceAutoComplete(
+          spanName: 'Meeting is in CLOSED State',
+        );
 
-      videoSDKTelemetery!.flush();
+        videoSDKTelemetery!.flush();
+      }
     } catch (error) {}
   }
 
@@ -3503,6 +4468,13 @@ class Room {
     Span? changeModeSpan;
     Span? routerSpan;
     Span? requestSpan;
+
+    if (_webSocket == null) {
+      _eventEmitter.emit("error", VideoSDKErrors[3022]);
+      print(
+          "An error occurred in changeMode(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      return;
+    }
 
     try {
       if (videoSDKTelemetery != null) {
@@ -3517,10 +4489,18 @@ class Room {
     try {
       if (currentMode == requestedMode) {
         //
+        _eventEmitter.emit("error", VideoSDKErrors[3021]);
+        Map<String, String> attributes = {
+          "error": "Error in changeMode() : Already in the $requestedMode mode"
+        };
         VideoSDKLog.createLog(
             message:
-                "Error in changeMode() \n You are already in the $requestedMode mode",
-            logLevel: "ERROR");
+                "Mode change failed. You are already in the $requestedMode mode. Please select a different mode and try again.",
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in changeMode(): You are already in the $requestedMode mode. Please select a different mode and try again.");
 
         //
         if (changeModeSpan != null) {
@@ -3530,14 +4510,12 @@ class Room {
               message: 'Already in the $requestedMode mode');
         }
 
-        //
-        throw Exception("You are already in the $requestedMode mode");
+        return;
       }
       _mode = requestedMode;
       if (requestedMode == Mode.CONFERENCE) {
-        log("Starting mode change to Conference");
+        log("Changing mode to Conference");
         _consume = true;
-        _produce = true;
 
         try {
           if (changeModeSpan != null) {
@@ -3555,7 +4533,34 @@ class Room {
 
         _device = Device();
 
-        await _device!.load(routerRtpCapabilities: rtpCapabilities);
+        if (_device != null) {
+          await _device!.load(routerRtpCapabilities: rtpCapabilities);
+        } else {
+          try {
+            if (routerSpan != null) {
+              videoSDKTelemetery!.completeSpan(
+                span: routerSpan,
+                status: StatusCode.error,
+                message:
+                    'Loading Router Capabilities Failed \n Mediasoup device not found',
+              );
+            }
+          } catch (e) {}
+
+          _eventEmitter.emit("error", VideoSDKErrors[3021]);
+          Map<String, String> attributes = {
+            "error": "Error in changeMode(): Something went wrong.",
+            "errorMessage": "Error in changeMode(): MediaSoup device not found."
+          };
+          VideoSDKLog.createLog(
+              message: VideoSDKErrors[3021]!['message']!,
+              logLevel: "ERROR",
+              attributes: attributes,
+              dashboardLog: true);
+          print(
+              "An error occurred in changeMode(): VIDEOSDK ERROR :: ${VideoSDKErrors[3021]?['code']}  :: ${VideoSDKErrors[3021]?['name']} :: ${VideoSDKErrors[3021]?['message']}");
+          return;
+        }
 
         try {
           if (routerSpan != null) {
@@ -3673,12 +4678,18 @@ class Room {
       }
     } catch (error) {
       //
+      _eventEmitter.emit("error", VideoSDKErrors[3021]);
+      Map<String, String> attributes = {
+        "error": "Error in changeMode(): Something went wrong.",
+        "errorMessage": "Error in changeMode(): ${error.toString()}"
+      };
       VideoSDKLog.createLog(
-          message: "Error in changeMode() \n ${error.toString()}",
-          logLevel: "ERROR");
-
-      //
-      log('Error Changing Mode ${error.toString()}');
+          message: VideoSDKErrors[3021]!['message']!,
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in changeMode(): VIDEOSDK ERROR :: ${VideoSDKErrors[3021]?['code']}  :: ${VideoSDKErrors[3021]?['name']} :: ${VideoSDKErrors[3021]?['message']}");
 
       if (routerSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -3720,18 +4731,45 @@ class Room {
       }
     } catch (error) {}
 
-    await _webSocket!.socket.request("requestEntry", <String, dynamic>{
-      'name': localParticipant.displayName,
-    });
-
     try {
-      if (requestEntrySpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: requestEntrySpan,
-            status: StatusCode.ok,
-            message: 'Entry Requested Successfully');
+      if (_webSocket != null) {
+        await _webSocket!.socket.request("requestEntry", <String, dynamic>{
+          'name': localParticipant.displayName,
+        });
+      } else {
+        try {
+          if (requestEntrySpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: requestEntrySpan,
+                status: StatusCode.error,
+                message: 'Entry Requested Failed, websocket was null');
+          }
+        } catch (error) {}
+        return;
       }
-    } catch (error) {}
+
+      try {
+        if (requestEntrySpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: requestEntrySpan,
+              status: StatusCode.ok,
+              message: 'Entry Requested Successfully');
+        }
+      } catch (error) {}
+    } catch (error) {
+      VideoSDKLog.createLog(
+          message: "Error in _requestEntry() \n ${error.toString()}",
+          logLevel: "ERROR");
+
+      try {
+        if (requestEntrySpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: requestEntrySpan,
+              status: StatusCode.error,
+              message: 'Entry Requested Failed, \n ${error.toString()}');
+        }
+      } catch (error) {}
+    }
   }
 
   Future<void> _respondEntry(peerId, decision, Span? span) async {
@@ -3749,29 +4787,58 @@ class Room {
       }
     } catch (error) {}
 
-    await _webSocket!.socket.request(
-        "respondEntry", <String, dynamic>{'id': peerId, 'decision': decision});
-
     try {
-      if (respondEntrySpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: respondEntrySpan,
-            status: StatusCode.ok,
-            message: 'Entry Responded Successfully');
+      if (_webSocket != null) {
+        await _webSocket!.socket.request("respondEntry",
+            <String, dynamic>{'id': peerId, 'decision': decision});
+      } else {
+        try {
+          if (respondEntrySpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: respondEntrySpan,
+                status: StatusCode.error,
+                message: 'Entry Responded Failed, websocket was null');
+          }
+        } catch (error) {}
+        return;
       }
-    } catch (error) {}
+
+      try {
+        if (respondEntrySpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: respondEntrySpan,
+              status: StatusCode.ok,
+              message: 'Entry Responded Successfully');
+        }
+      } catch (error) {}
+    } catch (error) {
+      VideoSDKLog.createLog(
+          message: "Error in _respondEntry() \n ${error.toString()}",
+          logLevel: "ERROR");
+
+      try {
+        if (respondEntrySpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: respondEntrySpan,
+              status: StatusCode.error,
+              message: 'Entry Responded Failed, \n ${error.toString()}');
+        }
+      } catch (error) {}
+    }
   }
 
   Future<void> startRecording(
       {String? webhookUrl,
       String? awsDirPath,
       Map<String, dynamic>? config,
-      Map<String, dynamic>? transcription}) async {
+      PostTranscriptionConfig? postTranscriptionConfig}) async {
     Map<String, dynamic> data = {};
     if (webhookUrl != null) data["webhookUrl"] = webhookUrl;
     if (awsDirPath != null) data["awsDirPath"] = awsDirPath;
     if (config != null) data["config"] = config;
-    if (transcription != null) data["transcription"] = transcription;
+    if (postTranscriptionConfig != null) {
+      data["transcription"] = postTranscriptionConfig;
+    }
 
     Span? startRecordingSpan;
 
@@ -3788,8 +4855,8 @@ class Room {
                 config != null ? config.toString() : 'config Not Specify'),
             Attribute.fromString(
                 'transcription',
-                transcription != null
-                    ? transcription.toString()
+                postTranscriptionConfig != null
+                    ? postTranscriptionConfig.toString()
                     : 'transcription not started'),
           ],
         );
@@ -3797,13 +4864,20 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('startRecording', data);
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('startRecording', data);
 
-      if (startRecordingSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: startRecordingSpan,
-            status: StatusCode.ok,
-            message: 'startRecording() End');
+        if (startRecordingSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: startRecordingSpan,
+              status: StatusCode.ok,
+              message: 'startRecording() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in startRecording(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       //
@@ -3811,7 +4885,7 @@ class Room {
           message: "Error in startRecording() \n ${error.toString()}",
           logLevel: "ERROR");
       //
-      log("Error while starting recording $error");
+      log("Recording start request failed due to an error : $error");
 
       if (startRecordingSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -3833,13 +4907,20 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('stopRecording', {});
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('stopRecording', {});
 
-      if (stopRecordingSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: stopRecordingSpan,
-            status: StatusCode.ok,
-            message: 'stopRecording() End');
+        if (stopRecordingSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: stopRecordingSpan,
+              status: StatusCode.ok,
+              message: 'stopRecording() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in stopRecording(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       //
@@ -3861,11 +4942,13 @@ class Room {
 
   Future<void> startLivestream(outputs,
       {Map<String, dynamic>? config,
-      Map<String, dynamic>? transcription}) async {
+      PostTranscriptionConfig? postTranscriptionConfig}) async {
     Map<String, dynamic> data = {};
     if (outputs != null) data["outputs"] = outputs;
     if (config != null) data["config"] = config;
-    if (transcription != null) data["transcription"] = transcription;
+    if (postTranscriptionConfig != null) {
+      data["transcription"] = postTranscriptionConfig;
+    }
 
     Span? startLivestreamSpan;
     try {
@@ -3879,8 +4962,8 @@ class Room {
                 config != null ? config.toString() : 'config Not Specify'),
             Attribute.fromString(
                 'transcription',
-                transcription != null
-                    ? transcription.toString()
+                postTranscriptionConfig != null
+                    ? postTranscriptionConfig.toString()
                     : 'transcription not started'),
           ],
         );
@@ -3888,13 +4971,20 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('startLivestream', data);
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('startLivestream', data);
 
-      if (startLivestreamSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: startLivestreamSpan,
-            status: StatusCode.ok,
-            message: 'startLivestream() End');
+        if (startLivestreamSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: startLivestreamSpan,
+              status: StatusCode.ok,
+              message: 'startLivestream() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in startLivestream(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       //
@@ -3925,13 +5015,20 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('stopLivestream', {});
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('stopLivestream', {});
 
-      if (stopLivestreamSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: stopLivestreamSpan,
-            status: StatusCode.ok,
-            message: 'stopLivestream() End');
+        if (stopLivestreamSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: stopLivestreamSpan,
+              status: StatusCode.ok,
+              message: 'stopLivestream() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in stopLivestream(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       //
@@ -3953,10 +5050,12 @@ class Room {
 
   Future<void> startHls(
       {Map<String, dynamic>? config,
-      Map<String, dynamic>? transcription}) async {
+      PostTranscriptionConfig? postTranscriptionConfig}) async {
     Map<String, dynamic> data = {};
     if (config != null) data["config"] = config;
-    if (transcription != null) data["transcription"] = transcription;
+    if (postTranscriptionConfig != null) {
+      data["transcription"] = postTranscriptionConfig;
+    }
 
     Span? startHlsSpan;
     try {
@@ -3968,8 +5067,8 @@ class Room {
                 config != null ? config.toString() : 'config Not Specify'),
             Attribute.fromString(
                 'transcription',
-                transcription != null
-                    ? transcription.toString()
+                postTranscriptionConfig != null
+                    ? postTranscriptionConfig.toString()
                     : 'transcription not started'),
           ],
         );
@@ -3977,13 +5076,20 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('startHls', data);
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('startHls', data);
 
-      if (startHlsSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: startHlsSpan,
-            status: StatusCode.ok,
-            message: 'startHls() End');
+        if (startHlsSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: startHlsSpan,
+              status: StatusCode.ok,
+              message: 'startHls() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in startHls(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       //
@@ -4014,11 +5120,20 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('stopHls', {});
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('stopHls', {});
 
-      if (stopHlsSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: stopHlsSpan, status: StatusCode.ok, message: 'stopHls() End');
+        if (stopHlsSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: stopHlsSpan,
+              status: StatusCode.ok,
+              message: 'stopHls() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in stopHls(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       //
@@ -4037,9 +5152,13 @@ class Room {
     }
   }
 
-  Future<void> startTranscription({Map<String, dynamic>? config}) async {
+  Future<void> startTranscription(
+      {TranscriptionConfig? transcriptionConfig}) async {
     Map<String, dynamic> data = {};
-    if (config != null) data["config"] = config;
+    if (transcriptionConfig != null) {
+      data["config"] = transcriptionConfig;
+    }
+    ;
 
     Span? startTranscriptionSpan;
     try {
@@ -4047,21 +5166,31 @@ class Room {
         startTranscriptionSpan = videoSDKTelemetery!.trace(
           spanName: 'startTranscription() Start',
           attributes: [
-            Attribute.fromString('config',
-                config != null ? config.toString() : 'config Not Specify'),
+            Attribute.fromString(
+                'config',
+                transcriptionConfig != null
+                    ? transcriptionConfig.toString()
+                    : 'config Not Specify'),
           ],
         );
       }
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('startTranscription', data);
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('startTranscription', data);
 
-      if (startTranscriptionSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: startTranscriptionSpan,
-            status: StatusCode.ok,
-            message: 'startTranscription() End');
+        if (startTranscriptionSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: startTranscriptionSpan,
+              status: StatusCode.ok,
+              message: 'startTranscription() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in startTranscription(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       _eventEmitter.emit("error", VideoSDKErrors[4031]);
@@ -4072,7 +5201,6 @@ class Room {
           logLevel: "ERROR");
 
       //
-      log("Error while starting Transcription $error");
 
       if (startTranscriptionSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4094,13 +5222,20 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('stopTranscription', {});
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('stopTranscription', {});
 
-      if (stopTranscriptionSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: stopTranscriptionSpan,
-            status: StatusCode.ok,
-            message: 'stopTranscription() End');
+        if (stopTranscriptionSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: stopTranscriptionSpan,
+              status: StatusCode.ok,
+              message: 'stopTranscription() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in stopTranscription(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
       }
     } catch (error) {
       _eventEmitter.emit("error", VideoSDKErrors[4032]);
@@ -4120,8 +5255,9 @@ class Room {
     }
   }
 
-  Future<void> changeCam(String deviceId, [CustomTrack? customTrack]) async {
-    if (_selectedVideoInput?.deviceId == deviceId) {
+  Future<void> changeCam(VideoDeviceInfo device,
+      [CustomTrack? customTrack]) async {
+    if (_selectedVideoInput?.deviceId == device.deviceId) {
       return;
     }
 
@@ -4135,7 +5271,7 @@ class Room {
               customTrack != null
                   ? customTrack.toString()
                   : 'Not using customTrack'),
-          Attribute.fromString('deviceId', deviceId),
+          Attribute.fromString('deviceId', device.deviceId),
         ]);
       }
     } catch (error) {}
@@ -4143,24 +5279,59 @@ class Room {
     try {
       //
       _cameraInProgress = true;
-      //Not necessary in changeCam now
-      // MediaDeviceInfo device =
-      //     VideoSDK.mediaDevices[MediaDeviceType.videoInput]!.firstWhere(
-      //   (device) => device.deviceId == deviceId,
-      // );
 
-      //
-      //_selectedVideoInput = device;
+      if (customTrack != null) {
+        if (customTrack.ended == true) {
+          customTrack = null;
+          _eventEmitter.emit("error", VideoSDKErrors[3001]);
 
+          Map<String, String> attributes = {
+            "error":
+                "Error in changeCam(): Provided Custom Track has been disposed."
+          };
+          VideoSDKLog.createLog(
+              message: VideoSDKErrors[3001]!['message']!,
+              logLevel: "ERROR",
+              attributes: attributes,
+              dashboardLog: true);
+          print(
+              "An error occurred in changeCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3001]?['code']}  :: ${VideoSDKErrors[3001]?['name']} :: ${VideoSDKErrors[3001]?['message']}");
+        }
+      }
       //
       await _disableCamImpl(parentSpan: changeCamSpan);
 
       customTrack ??= await VideoSDK.createCameraVideoTrack(
-          cameraId: deviceId,
+          cameraId: device.deviceId,
           multiStream: _multiStream,
           encoderConfig: CustomVideoTrackConfig.h720p_w1280p);
 
-      //
+      //If there is an error, createCameraVideoTrack will return null.
+      if (customTrack == null) {
+        if (changeCamSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: changeCamSpan,
+              status: StatusCode.error,
+              message: 'Change Webcam Failed, could not create Video Track');
+        }
+        _eventEmitter.emit("error", VideoSDKErrors[3011]);
+        Map<String, String> attributes = {
+          "error": "Error in changeCam(): Something went wrong.",
+          "errorMessage":
+              "Error in changeCam() : Custom Track could not be created."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3011]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in changeCam(): VIDEOSDK ERROR :: ${VideoSDKErrors[3011]?['code']}  :: ${VideoSDKErrors[3011]?['name']} :: ${VideoSDKErrors[3011]?['message']}");
+
+        _cameraInProgress = false;
+        return;
+      }
+
       _enableCamImpl(customTrack: customTrack, parentSpan: changeCamSpan);
 
       //
@@ -4174,9 +5345,18 @@ class Room {
       }
     } catch (err) {
       //
+      Map<String, String> attributes = {
+        "error": "Error in changeCam(): Something went wrong.",
+        "errorMessage": "Error in changeCam(): ${err.toString()}"
+      };
       VideoSDKLog.createLog(
-          message: "Error in changeCam() \n ${err.toString()}",
-          logLevel: "ERROR");
+          message:
+              "Something went wrong, and the camera could not be changed. Please try again.",
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "An error occurred in changeCam(): Something went wrong, and the camera could not be changed. Please try again.");
 
       //
       if (changeCamSpan != null) {
@@ -4185,20 +5365,20 @@ class Room {
             status: StatusCode.error,
             message: 'Change Webcam Failed \n ${err.toString()}');
       }
-
-      //
-      log("handle camera error $err");
     }
   }
 
   //
-  List<MediaDeviceInfo> getCameras() =>
-      VideoSDK.mediaDevices[MediaDeviceType.videoInput]!;
+  // @Deprecated("Use VideoSDK.getVideoDevices() method instead")
+  // List<MediaDeviceInfo> getCameras() =>
+  //     VideoSDK.mediaDevices[MediaDeviceType.videoInput]!;
 
-  //
+  @Deprecated("Use selectedCam instead")
   String? get selectedCamId => _selectedVideoInput?.deviceId;
 
-  bool isMobilePlatform() {
+  VideoDeviceInfo? get selectedCam => _selectedVideoInput;
+
+  bool _isMobilePlatform() {
     if (kIsWeb) {
       return false;
     } else {
@@ -4210,31 +5390,34 @@ class Room {
   }
 
   //
-  List<MediaDeviceInfo> getMics() {
-    if (!isMobilePlatform()) {
-      return VideoSDK.mediaDevices[MediaDeviceType.audioInput]!;
-    }
-    return [];
-  }
+  // @Deprecated("Use VideoSDK.getAudioDevices() method instead")
+  // List<MediaDeviceInfo> getMics() {
+  //   if (!_isMobilePlatform()) {
+  //     return VideoSDK.mediaDevices[MediaDeviceType.audioInput]!;
+  //   }
+  //   return [];
+  // }
 
-  List<MediaDeviceInfo> getAudioOutputDevices() {
-    List<MediaDeviceInfo> audioOutputDevices =
-        VideoSDK.mediaDevices[MediaDeviceType.audioOutput]!;
-    if (!kIsWeb) {
-      if (Platform.isIOS) {
-        if (audioOutputDevices.length == 1) {
-          MediaDeviceInfo mediaDeviceInfo = MediaDeviceInfo(
-              label: "Receiver",
-              deviceId: "Built-In Receiver",
-              kind: "audiooutput");
-          audioOutputDevices.add(mediaDeviceInfo);
-        }
-      }
-    }
-    return audioOutputDevices;
-  }
+  // @Deprecated("Use VideoSDK.getAudioDevices() method instead")
+  // List<MediaDeviceInfo> getAudioOutputDevices() {
+  //   List<MediaDeviceInfo> audioOutputDevices =
+  //       VideoSDK.mediaDevices[MediaDeviceType.audioOutput]!;
+  //   if (!kIsWeb) {
+  //     if (Platform.isIOS) {
+  //       if (audioOutputDevices.length == 1) {
+  //         MediaDeviceInfo mediaDeviceInfo = MediaDeviceInfo(
+  //             label: "Receiver",
+  //             deviceId: "Built-In Receiver",
+  //             kind: "audiooutput");
+  //         audioOutputDevices.add(mediaDeviceInfo);
+  //       }
+  //     }
+  //   }
+  //   return audioOutputDevices;
+  // }
 
-  Future<void> switchAudioDevice(MediaDeviceInfo device) async {
+  Future<void> switchAudioDevice(AudioDeviceInfo device) async {
+
     Span? switchAudioDeviceSpan;
     try {
       if (videoSDKTelemetery != null) {
@@ -4243,43 +5426,62 @@ class Room {
       }
     } catch (error) {}
 
-    if (!kIsWeb) {
-      if (Platform.isIOS && device.deviceId == "Built-In Receiver") {
-        await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
-            appleAudioCategory: AppleAudioCategory.playAndRecord,
-            appleAudioCategoryOptions: {
-              AppleAudioCategoryOption.allowBluetooth,
-              AppleAudioCategoryOption.allowBluetoothA2DP
-            },
-            appleAudioMode: AppleAudioMode.voiceChat));
+    try {
+      if (!kIsWeb) {
+        if (Platform.isIOS && device.deviceId == "Built-In Receiver") {
+          await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
+              appleAudioCategory: AppleAudioCategory.playAndRecord,
+              appleAudioCategoryOptions: {
+                AppleAudioCategoryOption.allowBluetooth,
+                AppleAudioCategoryOption.allowBluetoothA2DP
+              },
+              appleAudioMode: AppleAudioMode.voiceChat));
+        } else {
+          await navigator.mediaDevices
+              .selectAudioOutput(AudioOutputOptions(deviceId: device.deviceId));
+        }
       } else {
-        await navigator.mediaDevices
-            .selectAudioOutput(AudioOutputOptions(deviceId: device.deviceId));
+        AudioHTMLInterface().setAudioOutputDevice(device.deviceId);
       }
-    } else {
-      // _peers.forEach((key, value) {
-      //   value.audioRenderer?.audioOutput(device.deviceId);
-      // });
 
-      AudioHTMLInterface().setAudioOutputDevice(device.deviceId);
-    }
+      _selectedAudioOutput = device;
 
-    _selectedAudioOutput = device;
-
-    if (switchAudioDeviceSpan != null) {
-      videoSDKTelemetery!.completeSpan(
-          span: switchAudioDeviceSpan,
-          status: StatusCode.ok,
-          message: 'Switching AudioDevice Successful');
+      if (switchAudioDeviceSpan != null) {
+        videoSDKTelemetery!.completeSpan(
+            span: switchAudioDeviceSpan,
+            status: StatusCode.ok,
+            message: 'Switching AudioDevice Successful');
+      }
+    } catch (e) {
+      if (switchAudioDeviceSpan != null) {
+        videoSDKTelemetery!.completeSpan(
+            span: switchAudioDeviceSpan,
+            status: StatusCode.ok,
+            message: 'Switching AudioDevice UnSuccessful');
+      }
+      Map<String, String> attributes = {
+        "error": "Error in switchAudioDevice(): Something went wrong.",
+        "errorMessage": "Error in switchAudioDevice(): ${e.toString()}."
+      };
+      VideoSDKLog.createLog(
+          message:
+              "Something went wrong, and the audio device could not be switched. Please try again.",
+          logLevel: "ERROR",
+          attributes: attributes,
+          dashboardLog: true);
+      print(
+          "Something went wrong, and the audio device could not be switched. Please try again.");
     }
   }
 
-  //
+  @Deprecated("Use selectedSpeaker instead")
   String? get selectedSpeakerId => _selectedAudioOutput?.deviceId;
 
-  Future<void> changeMic(MediaDeviceInfo device,
+  AudioDeviceInfo? get selectedSpeaker => _selectedAudioOutput;
+
+  Future<void> changeMic(AudioDeviceInfo device,
       [CustomTrack? customTrack]) async {
-    if (!isMobilePlatform()) {
+    if (!_isMobilePlatform()) {
       if (_selectedAudioInput == device) {
         return;
       }
@@ -4300,37 +5502,114 @@ class Room {
         }
       } catch (error) {}
 
-      //_selectedAudioInput = device;
+      try {
+        if (customTrack != null) {
+          if (customTrack.ended == true) {
+            customTrack = null;
+            _eventEmitter.emit("error", VideoSDKErrors[3002]);
 
-      customTrack ??= await VideoSDK.createMicrophoneAudioTrack(
-          microphoneId: device.deviceId,
-          encoderConfig: CustomAudioTrackConfig.speech_standard);
+            Map<String, String> attributes = {
+              "error":
+                  "Error in changeMic(): Provided Custom Track has been disposed."
+            };
+            VideoSDKLog.createLog(
+                message: VideoSDKErrors[3002]!['message']!,
+                logLevel: "ERROR",
+                attributes: attributes,
+                dashboardLog: true);
+            print(
+                "An error occurred in changeMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3002]?['code']}  :: ${VideoSDKErrors[3002]?['name']} :: ${VideoSDKErrors[3002]?['message']}");
+          }
+        }
 
-      await _disableMic(parentSpan: changeMicSpan);
+        await _disableMic(parentSpan: changeMicSpan);
 
-      await _enableMicImpl(customTrack: customTrack, parentSpan: changeMicSpan);
+        customTrack ??= await VideoSDK.createMicrophoneAudioTrack(
+            microphoneId: device.deviceId,
+            encoderConfig: CustomAudioTrackConfig.speech_standard);
 
-      if (changeMicSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: changeMicSpan,
-            status: StatusCode.ok,
-            message: 'Change Mic Successful');
+        if (customTrack == null) {
+          try {
+            if (changeMicSpan != null) {
+              videoSDKTelemetery!.completeSpan(
+                  span: changeMicSpan,
+                  status: StatusCode.error,
+                  message:
+                      'Change Mic Unsuccessful, custom track couldnt be created.');
+            }
+          } catch (error) {}
+
+          _eventEmitter.emit("error", VideoSDKErrors[3012]);
+          Map<String, String> attributes = {
+            "error": "Error in changeMic(): Something went wrong.",
+            "errorMessage":
+                "Error in changeMic() : Custom Track could not be created."
+          };
+          VideoSDKLog.createLog(
+              message: VideoSDKErrors[3012]!['message']!,
+              logLevel: "ERROR",
+              attributes: attributes,
+              dashboardLog: true);
+          print(
+              "An error occurred in changeMic(): VIDEOSDK ERROR :: ${VideoSDKErrors[3012]?['code']}  :: ${VideoSDKErrors[3012]?['name']} :: ${VideoSDKErrors[3012]?['message']}");
+
+          return;
+        }
+
+        await _enableMicImpl(
+            customTrack: customTrack, parentSpan: changeMicSpan);
+
+        if (changeMicSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: changeMicSpan,
+              status: StatusCode.ok,
+              message: 'Change Mic Successful');
+        }
+      } catch (e) {
+        Map<String, String> attributes = {
+          "error": "Error in changeMic(): Something went wrong.",
+          "errorMessage": "Error in changeMic(): ${e.toString()}"
+        };
+        VideoSDKLog.createLog(
+            message:
+                "Something went wrong, and the microphone could not be changed. Please try again.",
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in changeMic(): Something went wrong, and the microphone could not be changed. Please try again.");
+
+        //
+        if (changeMicSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: changeMicSpan,
+              status: StatusCode.error,
+              message: 'Change Mic Failed \n ${e.toString()}');
+        }
       }
     } else {
-      throw "Unsupported method for Mobile devices";
+      throw UnsupportedError(
+          'The changeMic() method is not supported for Mobile devices, Use switchAudioDevice() method instead.');
     }
   }
 
   //for mobile return audio output
+  @Deprecated("Use selectedMic Instead")
   String? get selectedMicId {
-    if (isMobilePlatform()) {
+    if (_isMobilePlatform()) {
       return _selectedAudioOutput?.deviceId;
     } else {
       return _selectedAudioInput?.deviceId;
     }
   }
 
-  //
+  AudioDeviceInfo? get selectedMic {
+    if (_isMobilePlatform()) {
+      return _selectedAudioOutput;
+    } else {
+      return _selectedAudioInput;
+    }
+  }
 
   //
   bool get micEnabled => _micState;
@@ -4350,9 +5629,23 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('enablePeerMic', {
-        "peerId": peerId,
-      });
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('enablePeerMic', {
+          "peerId": peerId,
+        });
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in enabling participant.unmuteMic(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        if (enablePeerMic != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: enablePeerMic,
+              status: StatusCode.error,
+              message:
+                  'Enable Peer Mic for $peerId Failed, websocket was null');
+        }
+        return;
+      }
 
       if (enablePeerMic != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4367,7 +5660,7 @@ class Room {
           logLevel: "ERROR");
 
       //
-      log("Error while enabling peer's mic $error");
+      log("Error while enabling peer's mic: $error");
 
       if (enablePeerMic != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4392,9 +5685,25 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('disablePeerMic', {
-        "peerId": peerId,
-      });
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('disablePeerMic', {
+          "peerId": peerId,
+        });
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in participant.muteMic(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        try {
+          if (disablePeerMic != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: disablePeerMic,
+                status: StatusCode.error,
+                message:
+                    'Disable Peer Mic for $peerId Failed, websocket was null');
+          }
+        } catch (e) {}
+        return;
+      }
 
       if (disablePeerMic != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4409,15 +5718,17 @@ class Room {
           logLevel: "ERROR");
 
       //
-      log("Error while disabling peer's mic $error");
+      log("Error while disabling peer's mic: $error");
 
-      if (disablePeerMic != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: disablePeerMic,
-            status: StatusCode.error,
-            message:
-                'Disable Peer Mic for $peerId Failed \n ${error.toString()}');
-      }
+      try {
+        if (disablePeerMic != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: disablePeerMic,
+              status: StatusCode.error,
+              message:
+                  'Disable Peer Mic for $peerId Failed \n ${error.toString()}');
+        }
+      } catch (e) {}
     }
   }
 
@@ -4433,9 +5744,25 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('enablePeerWebcam', {
-        "peerId": peerId,
-      });
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('enablePeerWebcam', {
+          "peerId": peerId,
+        });
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in participant.enableCam(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        try {
+          if (enablePeerCameraSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: enablePeerCameraSpan,
+                status: StatusCode.error,
+                message:
+                    'Enable Peer Camera for $peerId Failed, websocket was null');
+          }
+        } catch (e) {}
+        return;
+      }
 
       if (enablePeerCameraSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4451,13 +5778,15 @@ class Room {
       //
       log("Error while enabling peer's camera $error");
 
-      if (enablePeerCameraSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: enablePeerCameraSpan,
-            status: StatusCode.error,
-            message:
-                'Enable Peer Camera for $peerId Failed \n ${error.toString()}');
-      }
+      try {
+        if (enablePeerCameraSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: enablePeerCameraSpan,
+              status: StatusCode.error,
+              message:
+                  'Enable Peer Camera for $peerId Failed \n ${error.toString()}');
+        }
+      } catch (e) {}
     }
   }
 
@@ -4473,9 +5802,25 @@ class Room {
     } catch (error) {}
 
     try {
-      await _webSocket!.socket.request('disablePeerWebcam', {
-        "peerId": peerId,
-      });
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('disablePeerWebcam', {
+          "peerId": peerId,
+        });
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in participant.disableCam(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        try {
+          if (disablePeerCameraSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: disablePeerCameraSpan,
+                status: StatusCode.error,
+                message:
+                    'Disable Peer Camera for $peerId Failed \n websocket was null');
+          }
+        } catch (error) {}
+        return;
+      }
 
       if (disablePeerCameraSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4491,13 +5836,15 @@ class Room {
       //
       log("Error while disabling peer's camera $error");
 
-      if (disablePeerCameraSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: disablePeerCameraSpan,
-            status: StatusCode.error,
-            message:
-                'Disable Peer Camera for $peerId Failed \n ${error.toString()}');
-      }
+      try {
+        if (disablePeerCameraSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: disablePeerCameraSpan,
+              status: StatusCode.error,
+              message:
+                  'Disable Peer Camera for $peerId Failed \n ${error.toString()}');
+        }
+      } catch (error) {}
     }
   }
 
@@ -4511,10 +5858,26 @@ class Room {
         );
       }
     } catch (error) {}
+
     try {
-      await _webSocket!.socket.request('removePeer', {
-        "peerId": peerId,
-      });
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('removePeer', {
+          "peerId": peerId,
+        });
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in participant.remove(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        try {
+          if (removePeer != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: removePeer,
+                status: StatusCode.error,
+                message: 'Remove $peerId Peer Failed \n websocket was null');
+          }
+        } catch (e) {}
+        return;
+      }
 
       if (removePeer != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4531,346 +5894,351 @@ class Room {
       //
       log("Error while removing peer $error");
 
-      if (removePeer != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: removePeer,
-            status: StatusCode.error,
-            message: 'Remove $peerId Peer Failed \n ${error.toString()}');
-      }
+      try {
+        if (removePeer != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: removePeer,
+              status: StatusCode.error,
+              message: 'Remove $peerId Peer Failed \n ${error.toString()}');
+        }
+      } catch (e) {}
     }
   }
 
   Future<void> _addProducer(Producer producer) async {
-    final Consumer consumer = Consumer(
-      peerId: localParticipant.id,
-      appData: producer.appData,
-      localId: producer.localId,
-      producerId: producer.id,
-      id: producer.id,
-      stream: producer.stream,
-      rtpParameters: producer.rtpParameters,
-      track: producer.track,
-      closed: producer.closed,
-      rtpReceiver: null,
-    );
+    try {
+      final Consumer consumer = Consumer(
+        peerId: localParticipant.id,
+        appData: producer.appData,
+        localId: producer.localId,
+        producerId: producer.id,
+        id: producer.id,
+        stream: producer.stream,
+        rtpParameters: producer.rtpParameters,
+        track: producer.track,
+        closed: producer.closed,
+        rtpReceiver: null,
+      );
 
-    switch (producer.source) {
-      case 'mic':
-        {
-          _eventEmitter.emit(
-            "stream-enabled-${localParticipant.id}",
-            {
-              "audio": consumer,
-            },
-          );
+      switch (producer.source) {
+        case 'mic':
+          {
+            _eventEmitter.emit(
+              "stream-enabled-${localParticipant.id}",
+              {
+                "audio": consumer,
+              },
+            );
 
-          Producer? oldProducer = _micProducer;
+            Producer? oldProducer = _micProducer;
 
-          _micProducer = producer;
+            _micProducer = producer;
 
-          if (oldProducer != null) {
-            // oldProducer.track.stop();
-            oldProducer.close();
+            if (oldProducer != null) {
+              // oldProducer.track.stop();
+              oldProducer.close();
+            }
+
+            break;
           }
+        case 'webcam':
+          {
+            _cameraRenderer = RTCVideoRenderer();
+            await _cameraRenderer?.initialize();
 
-          break;
-        }
-      case 'webcam':
-        {
-          _cameraRenderer = RTCVideoRenderer();
-          await _cameraRenderer?.initialize();
+            _cameraRenderer?.srcObject = consumer.stream;
 
-          _cameraRenderer?.srcObject = consumer.stream;
+            _eventEmitter.emit(
+              "stream-enabled-${localParticipant.id}",
+              {
+                "video": consumer,
+                "renderer": _cameraRenderer as RTCVideoRenderer,
+              },
+            );
 
-          _eventEmitter.emit(
-            "stream-enabled-${localParticipant.id}",
-            {
-              "video": consumer,
-              "renderer": _cameraRenderer as RTCVideoRenderer,
-            },
-          );
+            _cameraProducer = producer;
+            break;
+          }
+        case 'screen':
+          {
+            _screenshareRenderer = RTCVideoRenderer();
+            await _screenshareRenderer!.initialize();
 
-          _cameraProducer = producer;
-          break;
-        }
-      case 'screen':
-        {
-          _screenshareRenderer = RTCVideoRenderer();
-          await _screenshareRenderer!.initialize();
+            _screenshareRenderer!.setSrcObject(
+                stream: consumer.stream, trackId: consumer.track.id);
 
-          _screenshareRenderer!.setSrcObject(
-              stream: consumer.stream, trackId: consumer.track.id);
+            _eventEmitter.emit(
+              "stream-enabled-${localParticipant.id}",
+              {
+                "share": consumer,
+                "shareRenderer": _screenshareRenderer as RTCVideoRenderer,
+              },
+            );
 
-          _eventEmitter.emit(
-            "stream-enabled-${localParticipant.id}",
-            {
-              "share": consumer,
-              "shareRenderer": _screenshareRenderer as RTCVideoRenderer,
-            },
-          );
+            _screenshareProducer = producer;
+            break;
+          }
+        case 'screen-audio':
+          {
+            _screenShareAudioRenderer = RTCVideoRenderer();
+            await _screenShareAudioRenderer!.initialize();
 
-          _screenshareProducer = producer;
-          break;
-        }
-      case 'screen-audio':
-        {
-          _screenShareAudioRenderer = RTCVideoRenderer();
-          await _screenShareAudioRenderer!.initialize();
+            _screenShareAudioRenderer!.srcObject = consumer.stream;
 
-          _screenShareAudioRenderer!.srcObject = consumer.stream;
-
-          _eventEmitter.emit(
-            "stream-enabled-${localParticipant.id}",
-            {
-              "share": consumer,
-              "audioRenderer": _screenShareAudioRenderer as RTCVideoRenderer,
-            },
-          );
-          _screenShareAudioProducer = producer;
-          break;
-        }
+            _eventEmitter.emit(
+              "stream-enabled-${localParticipant.id}",
+              {
+                "share": consumer,
+                "audioRenderer": _screenShareAudioRenderer as RTCVideoRenderer,
+              },
+            );
+            _screenShareAudioProducer = producer;
+            break;
+          }
+      }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _addProducer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   void _removeProducer(Producer producer, _ProducerType type) {
-    String? producerId = producer.id;
-    switch (type) {
-      case _ProducerType.micProducer:
-        producer.close();
+    try {
+      String? producerId = producer.id;
+      switch (type) {
+        case _ProducerType.micProducer:
+          producer.close();
 
-        _eventEmitter.emit(
-          "stream-disabled-${localParticipant.id}",
-          {
-            "audioConsumerId": producerId,
-          },
-        );
+          _eventEmitter.emit(
+            "stream-disabled-${localParticipant.id}",
+            {
+              "audioConsumerId": producerId,
+            },
+          );
 
-        break;
-      case _ProducerType.cameraProducer:
-        //
-        producer.close();
-        _cameraRenderer?.dispose();
+          break;
+        case _ProducerType.cameraProducer:
+          //
+          producer.close();
+          _cameraRenderer?.dispose();
 
-        //
-        _eventEmitter.emit(
-          "stream-disabled-${localParticipant.id}",
-          {
-            "renderer": _cameraRenderer,
-            "videoConsumerId": producerId,
-          },
-        );
-        break;
-      case _ProducerType.screenshareProducer:
+          //
+          _eventEmitter.emit(
+            "stream-disabled-${localParticipant.id}",
+            {
+              "renderer": _cameraRenderer,
+              "videoConsumerId": producerId,
+            },
+          );
+          break;
+        case _ProducerType.screenshareProducer:
 
-        //
-        producer.close();
-        _screenshareRenderer?.dispose();
-        //
-        _eventEmitter.emit(
-          "stream-disabled-${localParticipant.id}",
-          {
-            "shareRenderer": _screenshareRenderer,
-            "shareConsumerId": producerId,
-          },
-        );
-        break;
-      case _ProducerType.screenShareAudioProducer:
+          //
+          producer.close();
+          _screenshareRenderer?.dispose();
+          //
+          _eventEmitter.emit(
+            "stream-disabled-${localParticipant.id}",
+            {
+              "shareRenderer": _screenshareRenderer,
+              "shareConsumerId": producerId,
+            },
+          );
+          break;
+        case _ProducerType.screenShareAudioProducer:
 
-        //
-        producer.close();
-        _screenShareAudioRenderer?.dispose();
+          //
+          producer.close();
+          _screenShareAudioRenderer?.dispose();
 
-        _eventEmitter.emit(
-          "stream-disabled-${localParticipant.id}",
-          {
-            "audioRenderer": _screenShareAudioRenderer,
-            "shareConsumerId": producerId,
-          },
-        );
-        break;
+          _eventEmitter.emit(
+            "stream-disabled-${localParticipant.id}",
+            {
+              "audioRenderer": _screenShareAudioRenderer,
+              "shareConsumerId": producerId,
+            },
+          );
+          break;
+      }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _removeProducer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   // Peer
   //
   void _addPeer(Map<String, dynamic> newPeer, Span? span) {
-    //
-    final Peer peer = Peer.fromMap(newPeer);
-    //
-    _peers[peer.id] = peer;
-    //
-    _eventEmitter.emit("peers-bloc-participant-joined", peer);
+    try {
+      final Peer peer = Peer.fromMap(newPeer);
+      //
+      _peers[peer.id] = peer;
+      //
+      _eventEmitter.emit("peers-bloc-participant-joined", peer);
 
-    if (span != null) {
-      videoSDKTelemetery!.traceAutoComplete(
-          spanName: 'Emitted `PARTICIPANT_JOINED` Event', span: span);
+      if (span != null) {
+        videoSDKTelemetery!.traceAutoComplete(
+            spanName: 'Emitted `PARTICIPANT_JOINED` Event', span: span);
+      }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _addPeer() \n ${e.toString()}", logLevel: "ERROR");
+    }
+  }
+
+  void _addCharacterPeer(Map<String, dynamic> newPeer, Span? span) {
+    try {
+      newPeer.addAll({"mode": Mode.CONFERENCE.name});
+      final Peer peer = Peer.fromMap(newPeer);
+      //
+      _peers[peer.id] = peer;
+      //
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _addCharacterPeer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   //
   void __removePeer(String peerId, Span? span) {
-    //
-    final removedPeer = _peers.remove(peerId);
+    try {
+      final removedPeer = _peers.remove(peerId);
 
-    if (removedPeer?.audio != null) {
-      _eventEmitter.emit("stream-disabled-${peerId}",
-          {"audioConsumerId": removedPeer?.audio?.id});
-    }
+      if (removedPeer?.audio != null) {
+        _eventEmitter.emit("stream-disabled-${peerId}",
+            {"audioConsumerId": removedPeer?.audio?.id});
+      }
 
-    if (removedPeer?.video != null) {
-      _eventEmitter.emit("stream-disabled-${peerId}", {
-        "videoConsumerId": removedPeer?.video?.id,
-        "renderer": removedPeer?.renderer
-      });
-    }
+      if (removedPeer?.video != null) {
+        _eventEmitter.emit("stream-disabled-${peerId}", {
+          "videoConsumerId": removedPeer?.video?.id,
+          "renderer": removedPeer?.renderer
+        });
+      }
 
-    if (removedPeer?.share != null) {
-      _eventEmitter.emit("stream-disabled-${peerId}", {
-        "shareConsumerId": removedPeer?.share?.id,
-        "shareRenderer": removedPeer?.shareRenderer
-      });
-    }
+      if (removedPeer?.share != null) {
+        _eventEmitter.emit("stream-disabled-${peerId}", {
+          "shareConsumerId": removedPeer?.share?.id,
+          "shareRenderer": removedPeer?.shareRenderer
+        });
+      }
 
-    //presenter left
-    if (peerId == _activePresenterId) {
-      _eventEmitter.emit("peers-bloc-presenter-changed", null);
-    }
+      //presenter left
+      if (peerId == _activePresenterId) {
+        _eventEmitter.emit("peers-bloc-presenter-changed", null);
+      }
 
-    _eventEmitter.emit("peers-bloc-participant-left", peerId);
+      _eventEmitter.emit("peers-bloc-participant-left", peerId);
 
-    if (span != null) {
-      videoSDKTelemetery!.traceAutoComplete(
-          spanName: 'Emitted `PARTICIPANT_LEFT` Event', span: span);
+      if (span != null) {
+        videoSDKTelemetery!.traceAutoComplete(
+            spanName: 'Emitted `PARTICIPANT_LEFT` Event', span: span);
+      }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in __removePeer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   //
   Future<void> _addPeerConsumer(String peerId, Consumer consumer) async {
-    log("_addPeerConsumer ${consumer.kind} $peerId ${consumer.appData['share']}");
-    if (consumer.kind == 'video' && consumer.appData['share'] == true) {
-      //
-      _peers[peerId] = _peers[peerId]!.copyWith(
-        shareRenderer: RTCVideoRenderer(),
-        share: consumer,
-      );
+    try {
+      log("_addPeerConsumer ${consumer.kind} $peerId ${consumer.appData['share']}");
+      if (consumer.kind == 'video' && consumer.appData['share'] == true) {
+        //
+        _peers[peerId] = _peers[peerId]!.copyWith(
+          shareRenderer: RTCVideoRenderer(),
+          share: consumer,
+        );
 
-      //
-      await _peers[peerId]!.shareRenderer!.initialize();
+        //
+        await _peers[peerId]!.shareRenderer!.initialize();
 
-      //
-      _peers[peerId]!.shareRenderer!.setSrcObject(
-          stream: _peers[peerId]!.share!.stream,
-          trackId: _peers[peerId]!.share!.track.id);
+        //
+        _peers[peerId]!.shareRenderer!.setSrcObject(
+            stream: _peers[peerId]!.share!.stream,
+            trackId: _peers[peerId]!.share!.track.id);
 
-      //
-      _eventEmitter.emit("stream-enabled-$peerId", {
-        "shareRenderer": _peers[peerId]!.shareRenderer,
-        "share": _peers[peerId]!.share
-      });
+        //
+        _eventEmitter.emit("stream-enabled-$peerId", {
+          "shareRenderer": _peers[peerId]!.shareRenderer,
+          "share": _peers[peerId]!.share
+        });
 
-      //
-      _eventEmitter.emit("peers-bloc-presenter-changed", peerId);
+        //
+        _eventEmitter.emit("peers-bloc-presenter-changed", peerId);
 
-      consumer.on('transportclose', () {
-        try {
-          _peers[peerId]?.shareRenderer?.dispose();
-        } catch (error) {
-          //
-          VideoSDKLog.createLog(
-              message:
-                  "error in consumer transportclose share \n ${error.toString()}",
-              logLevel: "ERROR");
-        }
-      });
-    } else if (consumer.kind == 'video') {
-      //
-      _peers[peerId] = _peers[peerId]!.copyWith(
-        renderer: RTCVideoRenderer(),
-        video: consumer,
-      );
+        consumer.on('transportclose', () {
+          try {
+            _peers[peerId]?.shareRenderer?.dispose();
+          } catch (error) {
+            //
+            VideoSDKLog.createLog(
+                message:
+                    "error in consumer transportclose share \n ${error.toString()}",
+                logLevel: "ERROR");
+          }
+        });
+      } else if (consumer.kind == 'video') {
+        //
+        _peers[peerId] = _peers[peerId]!.copyWith(
+          renderer: RTCVideoRenderer(),
+          video: consumer,
+        );
 
-      //
-      await _peers[peerId]!.renderer!.initialize();
+        //
+        await _peers[peerId]!.renderer!.initialize();
 
-      //
-      _peers[peerId]!.renderer!.setSrcObject(
-          stream: _peers[peerId]!.video!.stream,
-          trackId: _peers[peerId]!.video!.track.id);
+        //
+        _peers[peerId]!.renderer!.setSrcObject(
+            stream: _peers[peerId]!.video!.stream,
+            trackId: _peers[peerId]!.video!.track.id);
 
-      //
-      _eventEmitter.emit("stream-enabled-$peerId", {
-        "renderer": _peers[peerId]!.renderer,
-        "video": _peers[peerId]!.video
-      });
-      //
-      consumer.on('transportclose', () {
-        try {
-          _peers[peerId]?.renderer?.dispose();
-        } catch (error) {
-          //
-          VideoSDKLog.createLog(
-              message:
-                  "error in consumer transportclose video \n ${error.toString()}",
-              logLevel: "ERROR");
-        }
-      });
-    } else if (consumer.kind == 'audio' && consumer.appData['share'] == true) {
-      _peers[peerId] = _peers[peerId]!.copyWith(
-        audio: consumer,
-        audioRenderer: RTCVideoRenderer(),
-      );
-
-      //
-      await _peers[peerId]!.audioRenderer!.initialize();
-
-      //
-      _peers[peerId]!.audioRenderer!.srcObject = _peers[peerId]!.audio!.stream;
-
-      //
-      _eventEmitter.emit("stream-enabled-$peerId", {
-        "audioRenderer": _peers[peerId]!.audioRenderer,
-        "shareAudio": _peers[peerId]!.audio
-      });
-
-      if (_selectedAudioOutput != null) {
-        _peers[peerId]!
-            .audioRenderer!
-            .audioOutput(_selectedAudioOutput!.deviceId);
-      }
-
-      consumer.on('transportclose', () {
-        try {
-          _peers[peerId]?.audioRenderer?.dispose();
-        } catch (error) {
-          //
-          VideoSDKLog.createLog(
-              message:
-                  "error in consumer transportclose shareAudio \n ${error.toString()}",
-              logLevel: "ERROR");
-        }
-      });
-    } else if (consumer.kind == 'audio') {
-      if (kIsWeb) {
+        //
+        _eventEmitter.emit("stream-enabled-$peerId", {
+          "renderer": _peers[peerId]!.renderer,
+          "video": _peers[peerId]!.video
+        });
+        //
+        consumer.on('transportclose', () {
+          try {
+            _peers[peerId]?.renderer?.dispose();
+          } catch (error) {
+            //
+            VideoSDKLog.createLog(
+                message:
+                    "error in consumer transportclose video \n ${error.toString()}",
+                logLevel: "ERROR");
+          }
+        });
+      } else if (consumer.kind == 'audio' &&
+          consumer.appData['share'] == true) {
         _peers[peerId] = _peers[peerId]!.copyWith(
           audio: consumer,
           audioRenderer: RTCVideoRenderer(),
         );
 
-        AudioHTMLInterface().startAudio(_peers[peerId]!.audio);
+        //
+        await _peers[peerId]!.audioRenderer!.initialize();
+
+        //
+        _peers[peerId]!.audioRenderer!.srcObject =
+            _peers[peerId]!.audio!.stream;
 
         //
         _eventEmitter.emit("stream-enabled-$peerId", {
           "audioRenderer": _peers[peerId]!.audioRenderer,
-          "audio": _peers[peerId]!.audio
+          "shareAudio": _peers[peerId]!.audio
         });
 
         if (_selectedAudioOutput != null) {
-          // _peers[peerId]!
-          //     .audioRenderer!
-          //     .audioOutput(_selectedAudioOutput!.deviceId);
-
-          AudioHTMLInterface()
-              .setAudioOutputDevice(_selectedAudioOutput!.deviceId);
+          _peers[peerId]!
+              .audioRenderer!
+              .audioOutput(_selectedAudioOutput!.deviceId);
         }
 
         consumer.on('transportclose', () {
@@ -4880,191 +6248,251 @@ class Room {
             //
             VideoSDKLog.createLog(
                 message:
-                    "error in consumer transportclose audio \n ${error.toString()}",
+                    "error in consumer transportclose shareAudio \n ${error.toString()}",
                 logLevel: "ERROR");
           }
         });
-      } else {
-        _peers[peerId] = _peers[peerId]!.copyWith(
-          audio: consumer,
-        );
+      } else if (consumer.kind == 'audio') {
+        if (kIsWeb) {
+          _peers[peerId] = _peers[peerId]!.copyWith(
+            audio: consumer,
+            audioRenderer: RTCVideoRenderer(),
+          );
 
-        _eventEmitter.emit("stream-enabled-$peerId", {
-          "audio": consumer,
-        });
+          AudioHTMLInterface().startAudio(_peers[peerId]!.audio);
+
+          //
+          _eventEmitter.emit("stream-enabled-$peerId", {
+            "audioRenderer": _peers[peerId]!.audioRenderer,
+            "audio": _peers[peerId]!.audio
+          });
+
+          if (_selectedAudioOutput != null) {
+            AudioHTMLInterface()
+                .setAudioOutputDevice(_selectedAudioOutput!.deviceId);
+          }
+
+          consumer.on('transportclose', () {
+            try {
+              _peers[peerId]?.audioRenderer?.dispose();
+            } catch (error) {
+              //
+              VideoSDKLog.createLog(
+                  message:
+                      "error in consumer transportclose audio \n ${error.toString()}",
+                  logLevel: "ERROR");
+            }
+          });
+        } else {
+          _peers[peerId] = _peers[peerId]!.copyWith(
+            audio: consumer,
+          );
+
+          if (!kIsWeb) {
+            if (Platform.isIOS) {
+              if (_selectedAudioOutput != null) {
+                switchAudioDevice(_selectedAudioOutput!);
+              }
+            }
+          }
+
+          _eventEmitter.emit("stream-enabled-$peerId", {
+            "audio": consumer,
+          });
+        }
       }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _addPeerConsumer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   //
   Future<void> _removePeerConsumer(String consumerId) async {
-    //
-    final Peer? peer = _peers.values.firstWhereOrNull(
-      (p) => p.consumers.contains(
-        consumerId,
-      ),
-    );
+    try {
+      final Peer? peer = _peers.values.firstWhereOrNull(
+        (p) => p.consumers.contains(
+          consumerId,
+        ),
+      );
 
-    //
-    if (peer != null) {
-      if (peer.audio?.id == consumerId) {
-        final consumer = peer.audio;
-        if (kIsWeb) {
-          AudioHTMLInterface().stopAudio(peer.audio!.track.id!);
+      //
+      if (peer != null) {
+        if (peer.audio?.id == consumerId) {
+          final consumer = peer.audio;
+          if (kIsWeb) {
+            AudioHTMLInterface().stopAudio(peer.audio!.track.id!);
+          }
+
+          _peers[peer.id] = _peers[peer.id]!.removeAudio();
+
+          await consumer?.close();
+
+          _eventEmitter.emit(
+            "stream-disabled-${peer.id}",
+            {
+              "audioConsumerId": consumer?.id,
+            },
+          );
+        } else if (peer.video?.id == consumerId) {
+          final consumer = peer.video;
+          final renderer = peer.renderer;
+          _peers[peer.id] = _peers[peer.id]!.removeVideoAndRenderer();
+
+          await consumer?.close();
+
+          await renderer?.dispose();
+
+          _eventEmitter.emit(
+            "stream-disabled-${peer.id}",
+            {
+              "renderer": renderer,
+              "videoConsumerId": consumer?.id,
+            },
+          );
+        } else if (peer.share?.id == consumerId) {
+          final consumer = peer.share;
+          final renderer = peer.shareRenderer;
+
+          _peers[peer.id] = _peers[peer.id]!.removeShareAndRenderer();
+
+          await consumer?.close();
+
+          await renderer?.dispose();
+
+          _eventEmitter.emit(
+            "stream-disabled-${peer.id}",
+            {
+              "shareRenderer": renderer,
+              "shareConsumerId": consumer?.id,
+            },
+          );
+
+          _eventEmitter.emit("peers-bloc-presenter-changed");
         }
-
-        _peers[peer.id] = _peers[peer.id]!.removeAudio();
-
-        await consumer?.close();
-
-        _eventEmitter.emit(
-          "stream-disabled-${peer.id}",
-          {
-            "audioConsumerId": consumer?.id,
-          },
-        );
-      } else if (peer.video?.id == consumerId) {
-        final consumer = peer.video;
-        final renderer = peer.renderer;
-        _peers[peer.id] = _peers[peer.id]!.removeVideoAndRenderer();
-
-        await consumer?.close();
-
-        await renderer?.dispose();
-
-        _eventEmitter.emit(
-          "stream-disabled-${peer.id}",
-          {
-            "renderer": renderer,
-            "videoConsumerId": consumer?.id,
-          },
-        );
-      } else if (peer.share?.id == consumerId) {
-        final consumer = peer.share;
-        final renderer = peer.shareRenderer;
-
-        _peers[peer.id] = _peers[peer.id]!.removeShareAndRenderer();
-
-        await consumer?.close();
-
-        await renderer?.dispose();
-
-        _eventEmitter.emit(
-          "stream-disabled-${peer.id}",
-          {
-            "shareRenderer": renderer,
-            "shareConsumerId": consumer?.id,
-          },
-        );
-
-        _eventEmitter.emit("peers-bloc-presenter-changed");
       }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _removePeerConsumer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   //
   // ignore: unused_element
   Future<void> _pausePeerConsumer(String consumerId) async {
-    //
-    final Peer? peer = _peers.values.firstWhereOrNull(
-      (p) => p.consumers.contains(
-        consumerId,
-      ),
-    );
+    try {
+      final Peer? peer = _peers.values.firstWhereOrNull(
+        (p) => p.consumers.contains(
+          consumerId,
+        ),
+      );
 
-    //
-    if (peer != null) {
       //
-      if (peer.audio?.id == consumerId) {
+      if (peer != null) {
         //
-        Peer newPeer = _peers[peer.id]!.copyWith(
-          audio: peer.audio!.pauseCopy(),
-        );
+        if (peer.audio?.id == consumerId) {
+          //
+          Peer newPeer = _peers[peer.id]!.copyWith(
+            audio: peer.audio!.pauseCopy(),
+          );
 
-        //
-        _peers[peer.id] = newPeer;
+          //
+          _peers[peer.id] = newPeer;
 
-        //
-        _eventEmitter.emit("stream-paused-${peer.id}", {
-          "audioConsumerId": consumerId,
-          "consumer": newPeer.audio,
-        });
-      } else if (peer.video?.id == consumerId) {
-        //
-        Peer newPeer = _peers[peer.id]!.copyWith(
-          video: peer.video!.pauseCopy(),
-        );
+          //
+          _eventEmitter.emit("stream-paused-${peer.id}", {
+            "audioConsumerId": consumerId,
+            "consumer": newPeer.audio,
+          });
+        } else if (peer.video?.id == consumerId) {
+          //
+          Peer newPeer = _peers[peer.id]!.copyWith(
+            video: peer.video!.pauseCopy(),
+          );
 
-        //
-        _peers[peer.id] = newPeer;
+          //
+          _peers[peer.id] = newPeer;
 
-        //
-        _eventEmitter.emit("stream-paused-${peer.id}", {
-          "videoConsumerId": consumerId,
-          "consumer": newPeer.video,
-        });
-      } else if (peer.share?.id == consumerId) {
-        //
-        Peer newPeer = _peers[peer.id]!.copyWith(
-          share: peer.share!.pauseCopy(),
-        );
+          //
+          _eventEmitter.emit("stream-paused-${peer.id}", {
+            "videoConsumerId": consumerId,
+            "consumer": newPeer.video,
+          });
+        } else if (peer.share?.id == consumerId) {
+          //
+          Peer newPeer = _peers[peer.id]!.copyWith(
+            share: peer.share!.pauseCopy(),
+          );
 
-        //
-        _peers[peer.id] = newPeer;
+          //
+          _peers[peer.id] = newPeer;
 
-        //
-        _eventEmitter.emit("stream-paused-${peer.id}", {
-          "shareConsumerId": consumerId,
-          "consumer": newPeer.share,
-        });
+          //
+          _eventEmitter.emit("stream-paused-${peer.id}", {
+            "shareConsumerId": consumerId,
+            "consumer": newPeer.share,
+          });
+        }
       }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _pausePeerConsumer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   //
   // ignore: unused_element
   Future<void> _resumePeerConsumer(String consumerId) async {
-    final Peer? peer = _peers.values.firstWhereOrNull(
-      (p) => p.consumers.contains(
-        consumerId,
-      ),
-    );
+    try {
+      final Peer? peer = _peers.values.firstWhereOrNull(
+        (p) => p.consumers.contains(
+          consumerId,
+        ),
+      );
 
-    if (peer != null) {
-      if (peer.audio?.id == consumerId) {
-        Peer newPeer = _peers[peer.id]!.copyWith(
-          audio: peer.audio!.resumeCopy(),
-        );
+      if (peer != null) {
+        if (peer.audio?.id == consumerId) {
+          Peer newPeer = _peers[peer.id]!.copyWith(
+            audio: peer.audio!.resumeCopy(),
+          );
 
-        _peers[peer.id] = newPeer;
+          _peers[peer.id] = newPeer;
 
-        _eventEmitter.emit("stream-resumed-${peer.id}", {
-          "audioConsumerId": consumerId,
-          "consumer": newPeer.audio,
-        });
-      } else if (peer.video?.id == consumerId) {
-        Peer newPeer = _peers[peer.id]!.copyWith(
-          video: peer.video!.resumeCopy(),
-        );
+          _eventEmitter.emit("stream-resumed-${peer.id}", {
+            "audioConsumerId": consumerId,
+            "consumer": newPeer.audio,
+          });
+        } else if (peer.video?.id == consumerId) {
+          Peer newPeer = _peers[peer.id]!.copyWith(
+            video: peer.video!.resumeCopy(),
+          );
 
-        _peers[peer.id] = newPeer;
+          _peers[peer.id] = newPeer;
 
-        _eventEmitter.emit("stream-resumed-${peer.id}", {
-          "videoConsumerId": consumerId,
-          "consumer": newPeer.video,
-        });
-      } else if (peer.share?.id == consumerId) {
-        Peer newPeer = _peers[peer.id]!.copyWith(
-          share: peer.share!.resumeCopy(),
-        );
+          _eventEmitter.emit("stream-resumed-${peer.id}", {
+            "videoConsumerId": consumerId,
+            "consumer": newPeer.video,
+          });
+        } else if (peer.share?.id == consumerId) {
+          Peer newPeer = _peers[peer.id]!.copyWith(
+            share: peer.share!.resumeCopy(),
+          );
 
-        _peers[peer.id] = newPeer;
+          _peers[peer.id] = newPeer;
 
-        _eventEmitter.emit("stream-resumed-${peer.id}", {
-          "shareConsumerId": consumerId,
-          "consumer": newPeer.share,
-        });
+          _eventEmitter.emit("stream-resumed-${peer.id}", {
+            "shareConsumerId": consumerId,
+            "consumer": newPeer.share,
+          });
+        }
       }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _resumePeerConsumer() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
@@ -5074,138 +6502,158 @@ class Room {
     required int spatialLayer,
     required int temporalLayer,
   }) {
-    //
-    final Peer? peer = _peers.values.firstWhereOrNull(
-      (p) => p.consumers.contains(
-        consumerId,
-      ),
-    );
+    try {
+      final Peer? peer = _peers.values.firstWhereOrNull(
+        (p) => p.consumers.contains(
+          consumerId,
+        ),
+      );
 
-    //
-    if (peer != null) {
       //
-      if (peer.video?.id == consumerId) {
+      if (peer != null) {
         //
-        Peer newPeer = _peers[peer.id]!.copyWith(
-            video: peer.video!.copyWith(
-          spatialLayer: spatialLayer,
-          temporalLayer: temporalLayer,
-        ));
+        if (peer.video?.id == consumerId) {
+          //
+          Peer newPeer = _peers[peer.id]!.copyWith(
+              video: peer.video!.copyWith(
+            spatialLayer: spatialLayer,
+            temporalLayer: temporalLayer,
+          ));
 
-        //
-        _peers[peer.id] = newPeer;
+          //
+          _peers[peer.id] = newPeer;
 
-        String prevQuality = "";
-        String currentQuality = "HIGH";
+          String prevQuality = "";
+          String currentQuality = "HIGH";
 
-        int totalSpatialLayers = peer.video!.appData['encodings'].length;
-        if (totalSpatialLayers > 1) {
-          prevQuality = totalSpatialLayers - 1 - peer.video!.spatialLayer == 0
-              ? "HIGH"
-              : totalSpatialLayers - 1 - peer.video!.spatialLayer == 1
-                  ? "MEDIUM"
-                  : "LOW";
-          currentQuality = totalSpatialLayers - 1 - spatialLayer == 0
-              ? "HIGH"
-              : totalSpatialLayers - 1 - spatialLayer == 1
-                  ? "MEDIUM"
-                  : "LOW";
-        } else {
-          prevQuality = "HIGH";
-          currentQuality = "HIGH";
+          int totalSpatialLayers = peer.video!.appData['encodings'].length;
+          if (totalSpatialLayers > 1) {
+            prevQuality = totalSpatialLayers - 1 - peer.video!.spatialLayer == 0
+                ? "HIGH"
+                : totalSpatialLayers - 1 - peer.video!.spatialLayer == 1
+                    ? "MEDIUM"
+                    : "LOW";
+            currentQuality = totalSpatialLayers - 1 - spatialLayer == 0
+                ? "HIGH"
+                : totalSpatialLayers - 1 - spatialLayer == 1
+                    ? "MEDIUM"
+                    : "LOW";
+          } else {
+            prevQuality = "HIGH";
+            currentQuality = "HIGH";
+          }
+
+          try {
+            VideoSDKLog.createLog(
+                message: "Protoo Noti: consumerLayersChanged for $consumerId",
+                logLevel: "INFO",
+                attributes: {
+                  'prevQuality': prevQuality,
+                  'currentQuality': currentQuality
+                });
+          } catch (error) {}
+
+          //
+          _eventEmitter.emit("quality-changed-${peer.id}", {
+            "spatialLayer": spatialLayer,
+            "temporalLayer": temporalLayer,
+            "prevQuality": prevQuality,
+            "currentQuality": currentQuality
+          });
         }
-
-        try {
-          VideoSDKLog.createLog(
-              message: "Protoo Noti: consumerLayersChanged for $consumerId",
-              logLevel: "INFO",
-              attributes: {
-                'prevQuality': prevQuality,
-                'currentQuality': currentQuality
-              });
-        } catch (error) {}
-
-        //
-        _eventEmitter.emit("quality-changed-${peer.id}", {
-          "spatialLayer": spatialLayer,
-          "temporalLayer": temporalLayer,
-          "prevQuality": prevQuality,
-          "currentQuality": currentQuality
-        });
       }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _changePeerConsumerQuality() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   List<dynamic> _getStats(String id, String type) {
-    if (type == "producer") {
-      return _latestStats[id] ?? [];
-    } else if (type == "consumer") {
-      Consumer? consumer = _recvTransport?.consumers[id];
+    try {
+      if (type == "producer") {
+        return _latestStats[id] ?? [];
+      } else if (type == "consumer") {
+        Consumer? consumer = _recvTransport?.consumers[id];
 
-      if (consumer != null) {
-        List<dynamic> stats = _latestStats[id] ?? [];
-        if (consumer.track.kind == "video" && stats.length > 0) {
-          stats[0]['spatialLayer'] = consumer.spatialLayer;
-          stats[0]['temporalLayer'] = consumer.temporalLayer;
+        if (consumer != null) {
+          List<dynamic> stats = _latestStats[id] ?? [];
+          if (consumer.track.kind == "video" && stats.length > 0) {
+            stats[0]['spatialLayer'] = consumer.spatialLayer;
+            stats[0]['temporalLayer'] = consumer.temporalLayer;
+          }
+          return stats;
+        } else {
+          return [];
         }
-        return stats;
-      } else {
-        return [];
       }
+      return [];
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _getStats() \n ${e.toString()}",
+          logLevel: "ERROR");
+      return [];
     }
-    return [];
   }
 
   //
   void _producerCallback(Producer producer) {
-    if (producer.source == 'mic') {
-      producer.on('transportclose', () {
-        _removeProducer(_micProducer!, _ProducerType.micProducer);
-      });
-
-      producer.on('trackended', () {
-        _disableMic(trackEnded: true).catchError((data) {
-          //
-          VideoSDKLog.createLog(
-              message: "Error in micProducer trackended \n ${data.toString()}",
-              logLevel: "ERROR");
+    try {
+      if (producer.source == 'mic') {
+        producer.on('transportclose', () {
+          _removeProducer(_micProducer!, _ProducerType.micProducer);
         });
-      });
-      _micInProgress = false;
-    } else if (producer.source == 'webcam') {
-      producer.on('transportclose', () {
-        _removeProducer(_cameraProducer!, _ProducerType.cameraProducer);
-      });
 
-      producer.on('trackended', () {
-        _disableCamImpl().catchError((data) {
-          //
-          VideoSDKLog.createLog(
-              message: "Error in camProducer trackended \n ${data.toString()}",
-              logLevel: "ERROR");
+        producer.on('trackended', () {
+          _disableMic(trackEnded: true).catchError((data) {
+            //
+            VideoSDKLog.createLog(
+                message:
+                    "Error in micProducer trackended \n ${data.toString()}",
+                logLevel: "ERROR");
+          });
         });
-      });
-      _cameraInProgress = false;
-    } else if (producer.source == 'share') {
-      producer.on('transportclose', () {
-        _closeForegroundService();
-        _removeProducer(
-            _screenshareProducer!, _ProducerType.screenshareProducer);
-      });
+        _micInProgress = false;
+      } else if (producer.source == 'webcam') {
+        producer.on('transportclose', () {
+          _removeProducer(_cameraProducer!, _ProducerType.cameraProducer);
+        });
 
-      producer.on('trackended', () {
-        _closeForegroundService();
-        disableScreenShare().catchError((data) {
-          //
-          VideoSDKLog.createLog(
-              message:
-                  "error in shareProducer trackended \n ${data.toString()}",
-              logLevel: "ERROR");
+        producer.on('trackended', () {
+          _disableCamImpl().catchError((data) {
+            //
+            VideoSDKLog.createLog(
+                message:
+                    "Error in camProducer trackended \n ${data.toString()}",
+                logLevel: "ERROR");
+          });
         });
-      });
-      _screenShareInProgress = false;
+        _cameraInProgress = false;
+      } else if (producer.source == 'share') {
+        producer.on('transportclose', () {
+          _closeForegroundService();
+          _removeProducer(
+              _screenshareProducer!, _ProducerType.screenshareProducer);
+        });
+
+        producer.on('trackended', () {
+          _closeForegroundService();
+          disableScreenShare().catchError((data) {
+            //
+            VideoSDKLog.createLog(
+                message:
+                    "error in shareProducer trackended \n ${data.toString()}",
+                logLevel: "ERROR");
+          });
+        });
+        _screenShareInProgress = false;
+      }
+      _addProducer(producer);
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _producerCallback() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
-    _addProducer(producer);
   }
 
   void _consumerCallback(Consumer consumer, [dynamic accept]) {
@@ -5214,6 +6662,7 @@ class Room {
     _addPeerConsumer(consumer.peerId, consumer);
   }
 
+  //Not using anymore.
   Future<MediaStream> _createAudioStream() async {
     //
     Map<String, dynamic> mediaConstraints = {
@@ -5234,6 +6683,7 @@ class Room {
     return stream;
   }
 
+  //Not using anymore.
   Future<MediaStream> _createVideoStream() async {
     //
     Map<String, dynamic> mediaConstraints = <String, dynamic>{
@@ -5262,78 +6712,110 @@ class Room {
 
   Future<MediaStream?> _createShareStream(Span? span) async {
     Span? _internalSpan;
-    if (span != null) {
-      try {
-        _internalSpan = videoSDKTelemetery!.trace(
-          spanName: 'Creating Stream',
-          span: span,
-        );
-      } catch (error) {}
-    }
-    //
-    var mediaConstraints = <String, dynamic>{
-      'audio': true,
-      'video': _selectedScreenSource == null
-          ? true
-          : {
-              'deviceId': {'exact': _selectedScreenSource!.id},
-            }
-    };
-
-    if (!kIsWeb) {
-      if (Platform.isIOS) {
-        mediaConstraints['video'] = {'deviceId': 'broadcast'};
-        mediaConstraints = {
-          'video': {'deviceId': 'broadcast'}
-        };
+    try {
+      if (span != null) {
+        try {
+          _internalSpan = videoSDKTelemetery!.trace(
+            spanName: 'Creating Stream',
+            span: span,
+          );
+        } catch (error) {}
       }
-    }
-    //
-    MediaStream? stream;
-
-    final isWebMobile = kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.iOS ||
-            defaultTargetPlatform == TargetPlatform.android);
-
-    if (isWebMobile) {
-      _eventEmitter.emit("error", VideoSDKErrors[3015]);
       //
-      VideoSDKLog.createLog(
-          message:
-              "Error in enableScreenShare() \n Screen share feature not supported}",
-          logLevel: "Error");
+      var mediaConstraints = <String, dynamic>{
+        'audio': true,
+        'video': _selectedScreenSource == null
+            ? true
+            : {
+                'deviceId': {'exact': _selectedScreenSource!.id},
+              }
+      };
 
-      if (_internalSpan != null) {
-        videoSDKTelemetery!.completeSpan(
-            span: _internalSpan,
-            message: 'Stream Creation Failed due to platform not support',
-            status: StatusCode.error);
+      if (!kIsWeb) {
+        if (Platform.isIOS) {
+          mediaConstraints['video'] = {'deviceId': 'broadcast'};
+          mediaConstraints = {
+            'video': {'deviceId': 'broadcast'}
+          };
+        }
       }
-    } else {
-      stream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
-      stream.getVideoTracks().first.onEnded = () => disableScreenShare();
-    }
+      //
+      MediaStream? stream;
 
-    if (_internalSpan != null) {
-      videoSDKTelemetery!.completeSpan(
-          span: _internalSpan,
-          message: 'Stream Creation Completed',
-          status: StatusCode.ok);
-    }
+      final isWebMobile = kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.iOS ||
+              defaultTargetPlatform == TargetPlatform.android);
 
-    //
-    return stream;
+      if (isWebMobile) {
+        _eventEmitter.emit("error", VideoSDKErrors[3015]);
+        Map<String, String> attributes = {
+          "error": "Error in enableScreenShare(): Device not compatible."
+        };
+        VideoSDKLog.createLog(
+            message: VideoSDKErrors[3015]!['message']!,
+            logLevel: "ERROR",
+            attributes: attributes,
+            dashboardLog: true);
+        print(
+            "An error occurred in enableScreenShare(): VIDEOSDK ERROR :: ${VideoSDKErrors[3015]?['code']}  :: ${VideoSDKErrors[3015]?['name']} :: ${VideoSDKErrors[3015]?['message']}");
+
+        try {
+          if (_internalSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: _internalSpan,
+                message: 'Stream Creation Failed due to platform not support',
+                status: StatusCode.error);
+          }
+        } catch (e) {}
+        return null;
+      } else {
+        stream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
+        stream.getVideoTracks().first.onEnded = () => disableScreenShare();
+      }
+      try {
+        if (_internalSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: _internalSpan,
+              message: 'Stream Creation Completed',
+              status: StatusCode.ok);
+        }
+      } catch (e) {}
+
+      //
+      return stream;
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "Error in _createShareStream() \n ${e.toString()}",
+          logLevel: "ERROR");
+
+      try {
+        if (_internalSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: _internalSpan,
+              message: 'Stream Creation Failed due to error : ${e.toString()}',
+              status: StatusCode.error);
+        }
+      } catch (e) {}
+      return null;
+    }
   }
 
   // PubSub
   Future<void> _pubsubPublish({topic, message, options, payload}) async {
     try {
-      await _webSocket!.socket.request('pubsubPublish', {
-        'topic': topic,
-        'message': message,
-        'options': options,
-        'payload': payload
-      });
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('pubsubPublish', {
+          'topic': topic,
+          'message': message,
+          'options': options,
+          'payload': payload
+        });
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in pubSub.publish(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
     } catch (error) {
       //
       VideoSDKLog.createLog(
@@ -5346,9 +6828,16 @@ class Room {
 
   Future<dynamic> _pubsubSubscribe(topic) async {
     try {
-      var msgList =
-          await _webSocket!.socket.request('pubsubSubscribe', {'topic': topic});
-      return msgList;
+      if (_webSocket != null) {
+        var msgList = await _webSocket!.socket
+            .request('pubsubSubscribe', {'topic': topic});
+        return msgList;
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in pubSub.subscribe(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return null;
+      }
     } catch (error) {
       //
       VideoSDKLog.createLog(
@@ -5361,7 +6850,14 @@ class Room {
 
   Future<void> _pubsubUnsubscribe(topic) async {
     try {
-      await _webSocket!.socket.request('pubsubUnsubscribe', {'topic': topic});
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('pubsubUnsubscribe', {'topic': topic});
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in pubSub.unsubscribe(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
     } catch (error) {
       //
       VideoSDKLog.createLog(
@@ -5425,11 +6921,18 @@ class Room {
     temporalLayer,
   ) async {
     try {
-      await _webSocket!.socket.request('setConsumerPreferredLayers', {
-        "consumerId": consumerId,
-        "spatialLayer": spatialLayer,
-        "temporalLayer": temporalLayer,
-      });
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('setConsumerPreferredLayers', {
+          "consumerId": consumerId,
+          "spatialLayer": spatialLayer,
+          "temporalLayer": temporalLayer,
+        });
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in setConsumerQuality(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
     } catch (error) {
       //
       VideoSDKLog.createLog(
@@ -5442,26 +6945,285 @@ class Room {
   }
 
   void setViewPort(consumerId, viewportWidth, viewportHeight) {
-    Consumer? consumer = _recvTransport?.getConsumer(consumerId);
-    if (consumer == null) {
-      return;
-    }
-    Map<String, dynamic>? layers = SdkCapabilities.getAdaptivePreferredLayers(
-      consumer,
-      viewportWidth,
-      viewportHeight,
-    );
-    if (layers != null) {
-      _setConsumerPreferredLayers(
-        consumerId,
-        layers['newPreferredSpatialLayer'],
-        layers['newPreferredTemporalLayer'],
+    try {
+      Consumer? consumer = _recvTransport?.getConsumer(consumerId);
+      if (consumer == null) {
+        return;
+      }
+      Map<String, dynamic>? layers = SdkCapabilities.getAdaptivePreferredLayers(
+        consumer,
+        viewportWidth,
+        viewportHeight,
       );
+      if (layers != null) {
+        _setConsumerPreferredLayers(
+          consumerId,
+          layers['newPreferredSpatialLayer'],
+          layers['newPreferredTemporalLayer'],
+        );
+      }
+    } catch (e) {
+      VideoSDKLog.createLog(
+          message: "error in setViewPort() \n ${e.toString()}",
+          logLevel: "ERROR");
     }
   }
 
   on(Events event, Function handler) {
     _eventEmitter.on(event.parseToString(), handler);
+  }
+
+  off(Events event, Function handler) {
+    _eventEmitter.remove(event.parseToString(), handler);
+  }
+
+  Character createCharacter({required CharacterConfig characterConfig}) {
+    var character = Character(
+        characterConfig: characterConfig,
+        eventEmitter: _eventEmitter,
+        enablePeerMic: _enablePeerMic,
+        disablePeerMic: _disablePeerMic,
+        enablePeerCamera: _enablePeerCamera,
+        disablePeerCamera: _disablePeerCamera,
+        joinCharacter: _joinCharacter,
+        removeCharacter: _removeCharacter,
+        sendMessage: _sendCharacterMessage,
+        interruptCharacter: _interruptCharacter);
+
+    return character;
+  }
+
+  dynamic _joinCharacter({CharacterConfig? characterConfig}) async {
+    Span? joinCharacterSpan;
+    Map<String, dynamic> data = {};
+    if (characterConfig != null) data["config"] = characterConfig.toJson();
+
+    try {
+      if (videoSDKTelemetery != null) {
+        joinCharacterSpan = videoSDKTelemetery!.trace(
+          spanName: 'joinCharacter() Started',
+          attributes: [
+            Attribute.fromString(
+                'config',
+                characterConfig != null
+                    ? jsonEncode(characterConfig.toJson())
+                    : "Config not specified"),
+          ],
+        );
+      }
+    } catch (error) {}
+
+    try {
+      if (_webSocket != null) {
+        var response = await _webSocket!.socket.request("joinCharacter", data);
+
+        if (joinCharacterSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: joinCharacterSpan,
+              status: StatusCode.ok,
+              message: 'joinCharacter() End');
+        }
+        return response;
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in Character.join(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
+    } catch (error) {
+      //
+      VideoSDKLog.createLog(
+          message: "Error in joinCharacter() \n ${error.toString()}",
+          logLevel: "ERROR");
+      //
+      log("Character join request failed due to an error : $error");
+
+      if (joinCharacterSpan != null) {
+        videoSDKTelemetery!.completeSpan(
+            span: joinCharacterSpan,
+            status: StatusCode.error,
+            message: 'joinCharacter() Failed \n ${error.toString()}');
+      }
+      return false;
+    }
+  }
+
+  void _removeCharacter(config) async {
+    Span? removeCharacterSpan;
+    Map<String, dynamic> data = {};
+    if (config != null) data["config"] = config;
+
+    try {
+      if (videoSDKTelemetery != null) {
+        removeCharacterSpan = videoSDKTelemetery!.trace(
+          spanName: 'removeCharacter() Started',
+        );
+      }
+    } catch (error) {}
+
+    try {
+      if (_webSocket != null) {
+        await _webSocket!.socket.request("leaveCharacter", data);
+
+        if (removeCharacterSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: removeCharacterSpan,
+              status: StatusCode.ok,
+              message: 'removeCharacter() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in Character.leave(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
+    } catch (error) {
+      //
+      VideoSDKLog.createLog(
+          message: "Error in removeCharacter() \n ${error.toString()}",
+          logLevel: "ERROR");
+      //
+      log("Character leave request failed due to an error : $error");
+
+      if (removeCharacterSpan != null) {
+        videoSDKTelemetery!.completeSpan(
+            span: removeCharacterSpan,
+            status: StatusCode.error,
+            message: 'removeCharacter() Failed \n ${error.toString()}');
+      }
+    }
+  }
+
+  void _sendCharacterMessage(interactionId, text) async {
+    try {
+      if (_webSocket != null) {
+        await _webSocket!.socket.request("sendCharacterMessage",
+            {"interactionId": interactionId, "text": text});
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in Character.sendMessage(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
+    } catch (error) {
+      //
+      VideoSDKLog.createLog(
+          message: "Error in sendCharacterMessage() \n ${error.toString()}",
+          logLevel: "ERROR");
+      //
+      log("Character send message request failed due to an error : $error");
+    }
+  }
+
+  void _interruptCharacter(interactionId) async {
+    try {
+      if (_webSocket != null) {
+        await _webSocket!.socket
+            .request("interruptCharacter", {"interactionId": interactionId});
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in Character.interrupt(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
+    } catch (error) {
+      //
+      VideoSDKLog.createLog(
+          message: "Error in interruptCharacter() \n ${error.toString()}",
+          logLevel: "ERROR");
+      //
+      log("Character interrupt request failed due to an error : $error");
+    }
+  }
+
+  void startWhiteboard() async {
+    Span? startWBSpan;
+
+    try {
+      if (videoSDKTelemetery != null) {
+        startWBSpan = videoSDKTelemetery!.trace(
+          spanName: 'startWhiteboard() called',
+        );
+      }
+    } catch (error) {}
+
+    try {
+      if (_webSocket != null) {
+        await _webSocket!.socket.request("startWhiteboard", {
+          "version": "v2",
+        });
+
+        if (startWBSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: startWBSpan,
+              status: StatusCode.ok,
+              message: 'startWhiteboard() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in startWhiteboard(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
+    } catch (error) {
+      //
+      VideoSDKLog.createLog(
+          message: "Error in startWhiteboard() \n ${error.toString()}",
+          logLevel: "ERROR");
+      //
+      log("Whiteboard start request failed due to an error : $error");
+
+      if (startWBSpan != null) {
+        videoSDKTelemetery!.completeSpan(
+            span: startWBSpan,
+            status: StatusCode.error,
+            message: 'startWhiteboard() Failed \n ${error.toString()}');
+      }
+    }
+  }
+
+  void stopWhiteboard() async {
+    Span? stopWBSpan;
+    try {
+      if (videoSDKTelemetery != null) {
+        stopWBSpan = videoSDKTelemetery!.trace(
+          spanName: 'stopWhiteboard() Called',
+        );
+      }
+    } catch (error) {}
+
+    try {
+      if (_webSocket != null) {
+        await _webSocket!.socket.request('stopWhiteboard', {});
+
+        if (stopWBSpan != null) {
+          videoSDKTelemetery!.completeSpan(
+              span: stopWBSpan,
+              status: StatusCode.ok,
+              message: 'stopWhiteboard() End');
+        }
+      } else {
+        _eventEmitter.emit("error", VideoSDKErrors[3022]);
+        print(
+            "An error occurred in stopWhiteboard(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+        return;
+      }
+    } catch (error) {
+      //
+      VideoSDKLog.createLog(
+          message: "Error in stopWhiteboard() \n ${error.toString()}",
+          logLevel: "ERROR");
+
+      //
+      log("Error while stopping whiteboard $error");
+
+      if (stopWBSpan != null) {
+        videoSDKTelemetery!.completeSpan(
+            span: stopWBSpan,
+            status: StatusCode.error,
+            message: 'stopWhiteboard() Failed \n ${error.toString()}');
+      }
+    }
   }
 }
 
