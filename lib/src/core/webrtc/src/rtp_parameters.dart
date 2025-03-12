@@ -1,4 +1,5 @@
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+
 import '../src/common/index.dart';
 
 /// The RTP capabilities define what mediasoup or an endpoint can receive at
@@ -806,7 +807,7 @@ class RtcpParameters extends RTCRTCPParameters {
   }) {
     return RtcpParameters(
       mux: mux != null ? mux : old.mux,
-      cname: cname != null ? cname : old.cname,
+      cname: cname != null ? cname : old.cname ?? '',
       reducedSize: reducedSize != null ? reducedSize : old.reducedSize,
     );
   }

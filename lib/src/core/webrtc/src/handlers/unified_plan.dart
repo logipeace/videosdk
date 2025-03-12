@@ -1,5 +1,3 @@
-import 'dart:developer';
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:sdp_transform/sdp_transform.dart';
@@ -192,7 +190,7 @@ class UnifiedPlan extends HandlerInterface {
       mid: localId,
       kind: options.kind,
       offerRtpParameters: options.rtpParameters,
-      streamId: options.rtpParameters.rtcp!.cname,
+      streamId: options.rtpParameters.rtcp!.cname ?? '',
       trackId: options.trackId,
     );
 
@@ -499,24 +497,22 @@ class UnifiedPlan extends HandlerInterface {
       });
 
       var nextRid = 1;
-			var maxTemporalLayers = 1;
+      var maxTemporalLayers = 1;
 
-			for (var encoding in options.encodings)
-			{
-				var temporalLayers = encoding.scalabilityMode !=null
-					? ScalabilityMode.parse(encoding.scalabilityMode!).temporalLayers
-					: 3;
+      for (var encoding in options.encodings) {
+        var temporalLayers = encoding.scalabilityMode != null
+            ? ScalabilityMode.parse(encoding.scalabilityMode!).temporalLayers
+            : 3;
 
-				if (temporalLayers > maxTemporalLayers)
-				{
-					maxTemporalLayers = temporalLayers;
-				}
-			}
+        if (temporalLayers > maxTemporalLayers) {
+          maxTemporalLayers = temporalLayers;
+        }
+      }
 
-			for (var encoding in options.encodings)
-			{
-				encoding.rid = "r${nextRid++}";
-				encoding.scalabilityMode = "L1T${maxTemporalLayers}";}
+      for (var encoding in options.encodings) {
+        encoding.rid = "r${nextRid++}";
+        encoding.scalabilityMode = "L1T${maxTemporalLayers}";
+      }
     }
 
     RtpParameters sendingRtpParameters = RtpParameters.copy(

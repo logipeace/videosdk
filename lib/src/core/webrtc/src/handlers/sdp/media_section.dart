@@ -269,14 +269,14 @@ class Rid {
 
   Rid.fromMap(Map data)
       : id = data['id'] == 'r0'
-          ? 0
+            ? 0
             : data['id'] == 'r1'
-              ? 1
+                ? 1
                 : data['id'] == 'r2'
-                  ? 2
+                    ? 2
                     : 0,
         direction = data['direction'],
-      params = data['params'];
+        params = data['params'];
 
   Map<String, dynamic> toMap() {
     return {
@@ -1372,11 +1372,11 @@ class OfferMediaSection extends MediaSection {
           _mediaObject.ssrcGroups = [];
 
           if (offerRtpParameters.rtcp?.cname != null &&
-              offerRtpParameters.rtcp!.cname.isNotEmpty) {
+              offerRtpParameters.rtcp!.cname!.isNotEmpty) {
             _mediaObject.ssrcs!.add(Ssrc(
               id: ssrc,
               attribute: 'cname',
-              value: offerRtpParameters.rtcp!.cname,
+              value: offerRtpParameters.rtcp!.cname!,
             ));
           }
 
@@ -1390,11 +1390,11 @@ class OfferMediaSection extends MediaSection {
 
           if (rtxSsrc != null) {
             if (offerRtpParameters.rtcp?.cname != null &&
-                offerRtpParameters.rtcp!.cname.isNotEmpty) {
+                offerRtpParameters.rtcp!.cname!.isNotEmpty) {
               _mediaObject.ssrcs!.add(Ssrc(
                 id: rtxSsrc,
                 attribute: 'cname',
-                value: offerRtpParameters.rtcp!.cname,
+                value: offerRtpParameters.rtcp!.cname!,
               ));
             }
 
@@ -1460,7 +1460,7 @@ class OfferMediaSection extends MediaSection {
       _mediaObject.ssrcs!.add(Ssrc(
         id: ssrc,
         attribute: 'cname',
-        value: offerRtpParameters.rtcp!.cname,
+        value: offerRtpParameters.rtcp!.cname!,
       ));
     }
 
@@ -1472,11 +1472,11 @@ class OfferMediaSection extends MediaSection {
 
     if (rtxSsrc != null) {
       if (offerRtpParameters.rtcp?.cname != null &&
-          offerRtpParameters.rtcp!.cname.isNotEmpty) {
+          offerRtpParameters.rtcp!.cname!.isNotEmpty) {
         _mediaObject.ssrcs!.add(Ssrc(
           id: rtxSsrc,
           attribute: 'cname',
-          value: offerRtpParameters.rtcp!.cname,
+          value: offerRtpParameters.rtcp!.cname!,
         ));
       }
 
