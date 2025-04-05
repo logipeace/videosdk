@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:io' show Platform;
@@ -9,6 +8,7 @@ import 'package:events2/events2.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:videosdk/src/core/room/user_message.dart';
 import 'package:videosdk_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
 import 'package:videosdk/src/core/room/audio_html/audio_html_interface.dart';
@@ -169,8 +169,10 @@ class Room {
     _debugMode = debugMode;
 
     _mode = mode;
-    if (mode == Mode.CONFERENCE) {
+    if (mode == Mode.SEND_AND_RECV || mode == Mode.CONFERENCE) {
       _produce = true;
+      _consume = true;
+    } else if (mode == Mode.RECV_ONLY) {
       _consume = true;
     } else {
       _produce = false;
@@ -464,7 +466,7 @@ class Room {
       try {
         //
         if (_webSocket != null) {
-          await _webSocket!.socket.request(
+          await _webSocket!.sendRequest(
             'closeProducer',
             {
               'producerId': micId,
@@ -554,6 +556,7 @@ class Room {
   Future<void> _enableMicImpl(
       {CustomTrack? customTrack, Span? parentSpan}) async {
     //If method is called before meeting is joined
+
     if (_webSocket == null) {
       _eventEmitter.emit("error", VideoSDKErrors[3022]);
       print(
@@ -1613,7 +1616,7 @@ class Room {
       try {
         //
         if (_webSocket != null) {
-          await _webSocket!.socket.request('closeProducer', {
+          await _webSocket!.sendRequest('closeProducer', {
             'producerId': cameraId,
           });
         }
@@ -2254,7 +2257,7 @@ class Room {
         try {
           //
           if (_webSocket != null) {
-            await _webSocket!.socket.request('closeProducer', {
+            await _webSocket!.sendRequest('closeProducer', {
               'producerId': screenShareAudioId,
             });
           }
@@ -2313,7 +2316,7 @@ class Room {
       try {
         //
         if (_webSocket != null) {
-          await _webSocket!.socket.request('closeProducer', {
+          await _webSocket!.sendRequest('closeProducer', {
             'producerId': screenShareId,
           });
         }
@@ -2404,7 +2407,7 @@ class Room {
             ]);
       }
 
-      _webSocket?.socket.request(
+      await _webSocket!.sendRequest(
           'pinStateChanged', {'peerId': peerId, 'state': pinState.toJson()});
     } catch (error) {
       //
@@ -2429,7 +2432,7 @@ class Room {
     try {
       String initConfigUrl =
           "https://$_signalingBaseUrl/infra/v1/meetings/sdk-init-config";
-      //
+
       final jsonRes = await http.post(Uri.parse(initConfigUrl), body: {
         'roomId': id,
       }, headers: {
@@ -2522,6 +2525,8 @@ class Room {
       throw "Error while getting baseUrl";
     }
 
+    _eventEmitter.emit('meeting-state-changed', RoomState.connecting);
+
     // send trace roomConfig
     try {
       deviceInfo = await VideoSDK.getDeviceInfo();
@@ -2584,7 +2589,7 @@ class Room {
         peerId: localParticipant.id,
         meetingId: id,
         token: _token,
-        mode: _mode.parseToString());
+        mode: _mode.name);
 
     try {
       if (videoSDKTelemetery != null) {
@@ -2603,6 +2608,7 @@ class Room {
     //
     _webSocket!.onOpen = () {
       try {
+        _eventEmitter.emit('meeting-state-changed', RoomState.connected);
         if (videoSDKTelemetery != null) {
           videoSDKTelemetery!.traceAutoComplete(
             spanName: 'Meeting is in CONNECTED State',
@@ -2618,37 +2624,22 @@ class Room {
       _requestEntry();
     };
 
-    //
-    _webSocket!.onFail = () {
+    _webSocket!.onReconnection = () {
       try {
-        if (videoSDKTelemetery != null) {
-          videoSDKTelemetery!.traceAutoComplete(
-              spanName: 'Meeting is in FAILED State',
-              status: StatusCode.error,
-              message: 'WebSocket Connection Failed');
-        }
-      } catch (error) {
-        VideoSDKLog.createLog(
-            message: "Error in webSocket onFail \n ${error.toString()}",
-            logLevel: "ERROR");
-        log("Error in webSocket onFail $error");
-      }
-    };
+        _eventEmitter.emit('meeting-state-changed', RoomState.reconnecting);
 
-    //
-    _webSocket!.onDisconnected = () {
-      try {
         if (videoSDKTelemetery != null) {
           videoSDKTelemetery!.traceAutoComplete(
-            spanName: 'Meeting is in DISCONNECTED State',
+            spanName: 'Meeting is in Reconnection State',
           );
         }
       } catch (error) {
         VideoSDKLog.createLog(
-            message: "Error in webSocket onDisconnected \n ${error.toString()}",
+            message: "Error in webSocket onReconnection \n ${error.toString()}",
             logLevel: "ERROR");
-        log("Error in webSocket onDisconnected $error");
+        log("Error in webSocket onReconnection $error");
       }
+      _closeForegroundService();
 
       if (_micProducer != null) {
         if (!_micProducer!.closed && _micProducer!.paused) {
@@ -2656,41 +2647,68 @@ class Room {
         }
         _micProducer!.track.stop();
         _micProducer!.close();
+
+        _removeProducer(_micProducer!, _ProducerType.micProducer);
+        _micInProgress = false;
         _micProducer = null;
+        _customMicrophoneAudioTrack?.dispose();
+        _customMicrophoneAudioTrack = null;
+      }
+
+      if (_cameraProducer != null) {
+        //
+
+        _removeProducer(_cameraProducer!, _ProducerType.cameraProducer);
+        _cameraInProgress = false;
+        _cameraProducer = null;
+        _customCameraVideoTrack?.dispose();
+        _customCameraVideoTrack = null;
+      }
+      if (_screenShareAudioProducer != null) {
+        _removeProducer(
+            _screenShareAudioProducer!, _ProducerType.screenShareAudioProducer);
+
+        if (!_screenShareAudioProducer!.closed &&
+            _screenShareAudioProducer!.paused) {
+          _screenShareAudioProducer!.resume();
+        }
+        _screenShareInProgress = false;
+        _screenShareAudioProducer!.track.stop();
+        _screenShareAudioProducer!.close();
+        _screenShareAudioProducer = null;
+      }
+      if (_screenshareProducer != null) {
+        _removeProducer(
+            _screenshareProducer!, _ProducerType.screenshareProducer);
+
+        if (!_screenshareProducer!.closed && _screenshareProducer!.paused) {
+          _screenshareProducer!.resume();
+        }
+        _screenShareInProgress = false;
+        _screenshareProducer!.track.stop();
+        _screenshareProducer!.close();
+        _screenshareProducer = null;
       }
 
       if (_sendTransport != null) {
         _sendTransport!.close();
         _sendTransport = null;
       }
+
       if (_recvTransport != null) {
         _recvTransport!.close();
         _recvTransport = null;
       }
     };
 
-    //
+    _webSocket!.onDisconnected = () {};
+
     _webSocket!.onClose = () {
-      //
       if (_closed) return;
-      //
-      try {
-        if (videoSDKTelemetery != null) {
-          videoSDKTelemetery!.traceAutoComplete(
-            spanName: 'Meeting is in CLOSED State',
-          );
-        }
-      } catch (error) {
-        VideoSDKLog.createLog(
-            message: "Error in webSocket onClose \n ${error.toString()}",
-            logLevel: "ERROR");
-        log("Error in webSocket onClose $error");
-      }
-      //
+
       _close();
     };
 
-    //
     _webSocket!.onRequest = (request, accept, reject) async {
       switch (request['method']) {
         case "close":
@@ -2736,14 +2754,12 @@ class Room {
               } catch (error) {}
 
               _recvTransport!.consume(
-                id: request['data']['id'],
-                producerId: request['data']['producerId'],
-                kind: RTCRtpMediaTypeExtension.fromString(
-                    request['data']['kind']),
-                rtpParameters:
-                    RtpParameters.fromMap(request['data']['rtpParameters']),
-                appData: Map<String, dynamic>.from(request['data']['appData']),
-                peerId: request['data']['peerId'],
+                id: request['id'],
+                producerId: request['producerId'],
+                kind: RTCRtpMediaTypeExtension.fromString(request['kind']),
+                rtpParameters: RtpParameters.fromMap(request['rtpParameters']),
+                appData: Map<String, dynamic>.from(request['appData']),
+                peerId: request['peerId'],
                 accept: accept,
               );
 
@@ -3018,9 +3034,9 @@ class Room {
           }
         case "pinStateChanged":
           {
-            String peerId = request["data"]['peerId'];
-            Map<dynamic, dynamic> state = request["data"]['state'];
-            String? pinnedBy = request["data"]['pinnedBy'];
+            String peerId = request['peerId'];
+            Map<dynamic, dynamic> state = request['state'];
+            String? pinnedBy = request['pinnedBy'];
 
             Span? pinStateChangedSpan;
 
@@ -3133,7 +3149,7 @@ class Room {
 
         case 'consumerClosed':
           {
-            String consumerId = notification['data']['consumerId'];
+            String consumerId = notification['consumerId'];
             _removePeerConsumer(consumerId);
 
             try {
@@ -3163,9 +3179,9 @@ class Room {
 
         case "consumerLayersChanged":
           {
-            String consumerId = notification['data']['consumerId'];
-            int spatialLayer = notification['data']['spatialLayer'] ?? -1;
-            int temporalLayer = notification['data']['temporalLayer'] ?? -1;
+            String consumerId = notification['consumerId'];
+            int spatialLayer = notification['spatialLayer'] ?? -1;
+            int temporalLayer = notification['temporalLayer'] ?? -1;
 
             _changePeerConsumerQuality(
               consumerId,
@@ -3235,9 +3251,9 @@ class Room {
 
         case "entryResponded":
           {
-            var id = notification['data']['id'];
-            var decision = notification['data']['decision'];
-            var sessionId = notification['data']['sessionId'];
+            var id = notification['id'];
+            var decision = notification['decision'];
+            var sessionId = notification['sessionId'];
             VideoSDKLog.sessionId = sessionId;
 
             Span? entryRespondedSpan;
@@ -3265,6 +3281,7 @@ class Room {
 
             if (id == localParticipant.id && decision == "allowed") {
               _joinRoom();
+
               if (entryRespondedSpan != null) {
                 videoSDKTelemetery!.completeSpan(
                   span: entryRespondedSpan,
@@ -3288,7 +3305,7 @@ class Room {
         case 'newPeer':
           {
             final Map<String, dynamic> newPeer =
-                Map<String, dynamic>.from(notification['data']);
+                Map<String, dynamic>.from(notification);
 
             Span? newPeerSpan;
 
@@ -3317,7 +3334,7 @@ class Room {
 
         case 'peerClosed':
           {
-            String peerId = notification['data']['peerId'];
+            String peerId = notification['peerId'];
 
             Span? peerClosedSpan;
 
@@ -3354,14 +3371,14 @@ class Room {
 
         case 'recordingStateChanged':
           {
-            _recordingState = notification['data']['status'];
+            _recordingState = notification['status'];
 
             _eventEmitter.emit('recording-state-changed', _recordingState);
 
             if (videoSDKTelemetery != null) {
               videoSDKTelemetery!.traceAutoComplete(
                   spanName:
-                      'Emitted RECORDING_STATE_CHANGED, status : ${notification['data']['status']}',
+                      'Emitted RECORDING_STATE_CHANGED, status : ${notification['status']}',
                   attributes: [
                     Attribute.fromString(
                         'data', notification['data'].toString())
@@ -3387,14 +3404,14 @@ class Room {
 
         case 'livestreamStateChanged':
           {
-            _livestreamState = notification['data']['status'];
+            _livestreamState = notification['status'];
 
             _eventEmitter.emit('livestream-state-changed', _livestreamState);
 
             if (videoSDKTelemetery != null) {
               videoSDKTelemetery!.traceAutoComplete(
                   spanName:
-                      'Emitted LIVESTREAM_STATE_CHANGED, status : ${notification['data']['status']}',
+                      'Emitted LIVESTREAM_STATE_CHANGED, status : ${notification['status']}',
                   attributes: [
                     Attribute.fromString(
                         'data', notification['data'].toString())
@@ -3405,7 +3422,7 @@ class Room {
 
         case "hlsStarted":
           {
-            var downstreamUrl = notification['data']['downstreamUrl'];
+            var downstreamUrl = notification['downstreamUrl'];
             _eventEmitter.emit('hls-started', downstreamUrl);
 
             break;
@@ -3420,11 +3437,11 @@ class Room {
 
         case 'hlsStateChanged':
           {
-            _hlsState = notification['data']['status'];
+            _hlsState = notification['status'];
 
-            var downstreamUrl = notification['data']['downstreamUrl'];
-            var playbackHlsUrl = notification['data']['playbackHlsUrl'];
-            var livestreamUrl = notification['data']['livestreamUrl'];
+            var downstreamUrl = notification['downstreamUrl'];
+            var playbackHlsUrl = notification['playbackHlsUrl'];
+            var livestreamUrl = notification['livestreamUrl'];
 
             if (_hlsState == "HLS_STARTED") {
               _hlsDownstreamUrl = downstreamUrl;
@@ -3452,7 +3469,7 @@ class Room {
             if (videoSDKTelemetery != null) {
               videoSDKTelemetery!.traceAutoComplete(
                 spanName:
-                    'Emitted HLS_STATE_CHANGED, status : ${notification['data']['status']}',
+                    'Emitted HLS_STATE_CHANGED, status : ${notification['status']}',
                 attributes: [
                   Attribute.fromString('data', notification['data'].toString())
                 ],
@@ -3464,12 +3481,12 @@ class Room {
 
         case 'hlsPlayableStateChanged':
           {
-            bool isPlayable = notification["data"]["isPlayable"];
+            bool isPlayable = notification["isPlayable"];
             if (isPlayable) {
               _hlsState = "HLS_PLAYABLE";
-              var downstreamUrl = notification['data']['downstreamUrl'];
-              var playbackHlsUrl = notification['data']['playbackHlsUrl'];
-              var livestreamUrl = notification['data']['livestreamUrl'];
+              var downstreamUrl = notification['downstreamUrl'];
+              var playbackHlsUrl = notification['playbackHlsUrl'];
+              var livestreamUrl = notification['livestreamUrl'];
 
               _hlsUrls = {
                 "downstreamUrl": downstreamUrl,
@@ -3495,8 +3512,7 @@ class Room {
 
         case 'whiteboardStarted':
           {
-            _eventEmitter.emit(
-                'whiteboard-started', notification['data']['url']);
+            _eventEmitter.emit('whiteboard-started', notification['url']);
             break;
           }
 
@@ -3508,7 +3524,7 @@ class Room {
 
         case "activeSpeaker":
           {
-            String? peerId = notification['data']['peerId'];
+            String? peerId = notification['peerId'];
 
             if (peerId != _activeSpeakerId) {
               _activeSpeakerId = peerId;
@@ -3519,20 +3535,20 @@ class Room {
           }
         case "pubsubMessage":
           {
-            _eventEmitter.emit("pubsub-message", notification['data']);
+            _eventEmitter.emit("pubsub-message", notification);
             break;
           }
 
         case "peerModeChanged":
           {
-            _eventEmitter.emit(
-                "participant-mode-changed-${notification['data']['peerId']}", {
-              'participantId': notification['data']['peerId'],
-              'mode': notification['data']['mode'],
+            _eventEmitter
+                .emit("participant-mode-changed-${notification['peerId']}", {
+              'participantId': notification['peerId'],
+              'mode': notification['mode'],
             });
             _eventEmitter.emit("participant-mode-changed", {
-              'participantId': notification['data']['peerId'],
-              'mode': notification['data']['mode'],
+              'participantId': notification['peerId'],
+              'mode': notification['mode'],
             });
 
             if (videoSDKTelemetery != null) {
@@ -3548,9 +3564,9 @@ class Room {
           }
         case "restartIce":
           {
-            String transportId = notification['data']['transportId'];
+            String transportId = notification['transportId'];
             IceParameters iceParameters =
-                IceParameters.fromMap(notification['data']['iceParameters']);
+                IceParameters.fromMap(notification['iceParameters']);
 
             Span? restartIceSpan;
             if (videoSDKTelemetery != null) {
@@ -3569,13 +3585,12 @@ class Room {
 
         case 'transcriptionStateChanged':
           {
-            _eventEmitter.emit(
-                "transcription-state-changed", notification['data']);
+            _eventEmitter.emit("transcription-state-changed", notification);
 
             if (videoSDKTelemetery != null) {
               videoSDKTelemetery!.traceAutoComplete(
                 spanName:
-                    'Emitted TRANSCRIPTION_STATE_CHANGED, status: ${notification['data']['status']}',
+                    'Emitted TRANSCRIPTION_STATE_CHANGED, status: ${notification['status']}',
                 attributes: [
                   Attribute.fromString('data', notification['data'].toString())
                 ],
@@ -3587,7 +3602,7 @@ class Room {
 
         case 'transcriptionText':
           {
-            var data = notification['data'];
+            var data = notification;
             String participantId = data["participantId"];
             String participantName = data["participantName"];
             String text = data["text"];
@@ -3608,7 +3623,7 @@ class Room {
         case 'addCharacter':
           {
             final Map<String, dynamic> newCharacter =
-                Map<String, dynamic>.from(notification['data']);
+                Map<String, dynamic>.from(notification);
 
             Span? characterSpan;
 
@@ -3633,14 +3648,13 @@ class Room {
               );
             }
 
-            _eventEmitter.emit("ADD_CHARACTER", notification['data']);
+            _eventEmitter.emit("ADD_CHARACTER", notification);
 
             if (videoSDKTelemetery != null) {
               videoSDKTelemetery!.traceAutoComplete(
-                  spanName: 'Emitted ADD_CHARACTER : ${notification['data']}',
+                  spanName: 'Emitted ADD_CHARACTER : ${notification}',
                   attributes: [
-                    Attribute.fromString(
-                        'data', notification['data'].toString())
+                    Attribute.fromString('data', notification.toString())
                   ],
                   status: StatusCode.ok);
             }
@@ -3650,7 +3664,7 @@ class Room {
 
         case 'removeCharacter':
           {
-            String id = notification['data']['id'];
+            String id = notification['id'];
 
             Span? characterRemovedSpan;
 
@@ -3670,15 +3684,13 @@ class Room {
               );
             }
 
-            _eventEmitter.emit("REMOVE_CHARACTER", notification['data']);
+            _eventEmitter.emit("REMOVE_CHARACTER", notification);
 
             if (videoSDKTelemetery != null) {
               videoSDKTelemetery!.traceAutoComplete(
-                  spanName:
-                      'Emitted REMOVE_CHARACTER : ${notification['data']}',
+                  spanName: 'Emitted REMOVE_CHARACTER : ${notification}',
                   attributes: [
-                    Attribute.fromString(
-                        'data', notification['data'].toString())
+                    Attribute.fromString('data', notification.toString())
                   ],
                   status: StatusCode.ok);
             }
@@ -3686,12 +3698,12 @@ class Room {
           }
         case "characterStateChanged":
           {
-            _eventEmitter.emit("CHARACTER_STATE_CHANGED", notification['data']);
+            _eventEmitter.emit("CHARACTER_STATE_CHANGED", notification);
             videoSDKTelemetery!.traceAutoComplete(
                 spanName:
-                    'Emitted CHARACTER_STATE_CHANGED, status : : ${notification['data']['status']}',
+                    'Emitted CHARACTER_STATE_CHANGED, status : : ${notification['status']}',
                 attributes: [
-                  Attribute.fromString('data', notification['data'].toString())
+                  Attribute.fromString('data', notification.toString())
                 ],
                 status: StatusCode.ok);
 
@@ -3699,8 +3711,15 @@ class Room {
           }
         case 'characterMessage':
           {
-            _eventEmitter.emit("CHARACTER_MESSAGE",
-                CharacterMessage.fromJson(notification['data']));
+            _eventEmitter.emit(
+                "CHARACTER_MESSAGE", CharacterMessage.fromJson(notification));
+
+            break;
+          }
+        case 'userMessage':
+          {
+            _eventEmitter.emit(
+                "USER_MESSAGE", UserMessage.fromJson(notification));
 
             break;
           }
@@ -3727,13 +3746,13 @@ class Room {
 
       if (_sendTransport?.id == transportId) {
         _sendTransport!.restartIce(iceParameters);
-        _webSocket!.socket
-            .request('iceRestarted', {"transportId": _sendTransport!.id});
+        await _webSocket!
+            .sendRequest('iceRestart', {"transportId": _sendTransport!.id});
       }
       if (_recvTransport?.id == transportId) {
-        _recvTransport!.restartIce(iceParameters);
-        _webSocket!.socket
-            .request('iceRestarted', {"transportId": _recvTransport!.id});
+        await _webSocket!.sendRequest('iceRestarted', {
+          "transportId": _recvTransport!.id,
+        });
       }
 
       if (restartIceSpan != null) {
@@ -3790,7 +3809,7 @@ class Room {
       } catch (error) {}
 
       dynamic routerRtpCapabilities =
-          await _webSocket!.socket.request('getRouterRtpCapabilities', {});
+          await _webSocket!.sendRequest('getRouterRtpCapabilities', {});
 
       final rtpCapabilities = RtpCapabilities.fromMap(routerRtpCapabilities);
       rtpCapabilities.headerExtensions
@@ -3809,7 +3828,7 @@ class Room {
       if ((_device!.canProduce(RTCRtpMediaType.RTCRtpMediaTypeAudio) == true ||
               _device!.canProduce(RTCRtpMediaType.RTCRtpMediaTypeVideo) ==
                   true) &&
-          _mode == Mode.CONFERENCE) {
+          (_mode == Mode.SEND_AND_RECV || _mode == Mode.CONFERENCE)) {
         _produce = true;
       }
 
@@ -3817,7 +3836,7 @@ class Room {
 
       await _createReceiveTransport(parentSpan: _joinSpan);
 
-      Map response = await _webSocket!.socket.request('join', {
+      Map response = await _webSocket!.sendRequest('join', {
         'displayName': localParticipant.displayName,
         'device': {
           'name': "Flutter",
@@ -3918,22 +3937,16 @@ class Room {
                 'This notification appears when the foreground service is running.',
             channelImportance: NotificationChannelImportance.LOW,
             priority: NotificationPriority.LOW,
-            iconData: NotificationIconData(
-              resType: ResourceType.drawable,
-              resPrefix: ResourcePrefix.ic,
-              name: _notification.icon,
-            ),
           ),
           iosNotificationOptions: const IOSNotificationOptions(
             showNotification: true,
             playSound: false,
           ),
-          foregroundTaskOptions: const ForegroundTaskOptions(
-            interval: 5000,
+          foregroundTaskOptions: ForegroundTaskOptions(
+            eventAction: ForegroundTaskEventAction.repeat(5000),
             autoRunOnBoot: true,
             allowWifiLock: true,
           ),
-          // printDevLog: true,
         );
       } catch (err) {
         //
@@ -3979,7 +3992,6 @@ class Room {
       return;
     }
 
-    log("Send Transport $_produce");
     Span? sendTransportSpan;
     try {
       if (_produce) {
@@ -3991,7 +4003,7 @@ class Room {
         } catch (error) {}
 
         Map transportInfo =
-            await _webSocket!.socket.request('createWebRtcTransport', {
+            await _webSocket!.sendRequest('createWebRtcTransport', {
           'preferredProtocol': _preferredProtocol,
           'producing': true,
           'consuming': false,
@@ -4006,28 +4018,29 @@ class Room {
 
         _sendTransport!.on('connect', (Map data) {
           try {
-            if (videoSDKTelemetery != null) {
-              videoSDKTelemetery!.traceAutoComplete(
-                  spanName:
-                      'this._sendTransport `connect` Event : Transport is about to establish the ICE+DTLS connection');
-            }
-          } catch (error) {}
+            try {
+              if (videoSDKTelemetery != null) {
+                videoSDKTelemetery!.traceAutoComplete(
+                    spanName:
+                        'this._sendTransport `connect` Event : Transport is about to establish the ICE+DTLS connection');
+              }
+            } catch (error) {}
 
-          //
-          _webSocket!.socket
-              .request('connectWebRtcTransport', {
-                'transportId': _sendTransport!.id,
-                'dtlsParameters': data['dtlsParameters'].toMap(),
-              })
-              .then(data['callback'])
-              .catchError((error) {
-                data['callback'];
-                //
-                VideoSDKLog.createLog(
-                    message:
-                        "Error in sendTransport connect \n ${error.toString()}",
-                    logLevel: "ERROR");
-              });
+            _webSocket!
+                .sendRequest('connectWebRtcTransport', {
+                  'transportId': _sendTransport!.id,
+                  'dtlsParameters': data['dtlsParameters'].toMap(),
+                })
+                .then(data['callback'])
+                .catchError((error) {
+                  data['callback'];
+                  //
+                  VideoSDKLog.createLog(
+                      message:
+                          "Error in sendTransport connect \n ${error.toString()}",
+                      logLevel: "ERROR");
+                });
+          } catch (err) {}
         });
 
         _sendTransport!.on('produce', (Map data) async {
@@ -4040,7 +4053,7 @@ class Room {
           } catch (error) {}
 
           try {
-            Map response = await _webSocket!.socket.request(
+            Map response = await _webSocket!.sendRequest(
               'produce',
               {
                 'transportId': _sendTransport!.id,
@@ -4054,7 +4067,7 @@ class Room {
             data['callback'](response['id']);
           } catch (error) {
             data['errback'](error);
-            //
+
             VideoSDKLog.createLog(
                 message:
                     "Error in sendTransport produce \n ${error.toString()}",
@@ -4064,14 +4077,13 @@ class Room {
 
         _sendTransport!.on('producedata', (data) async {
           try {
-            Map response = await _webSocket!.socket.request('produceData', {
+            Map response = await _webSocket!.sendRequest('produceData', {
               'transportId': _sendTransport!.id,
               'sctpStreamParameters': data['sctpStreamParameters'].toMap(),
               'label': data['label'],
               'protocol': data['protocol'],
               'appData': data['appData'],
             });
-
             data['callback'](response['id']);
           } catch (error) {
             data['errback'](error);
@@ -4092,9 +4104,8 @@ class Room {
             }
           } catch (error) {}
 
-          //
           if (connectionState['connectionState'] == 'failed') {
-            _close("Network Error");
+            _failedclosed();
           }
         });
 
@@ -4200,7 +4211,7 @@ class Room {
           }
         } catch (error) {}
 
-        Map transportInfo = await _webSocket!.socket.request(
+        Map transportInfo = await _webSocket!.sendRequest(
           'createWebRtcTransport',
           {
             'preferredProtocol': _preferredProtocol,
@@ -4227,9 +4238,8 @@ class Room {
               }
             } catch (error) {}
 
-            //
-            _webSocket!.socket
-                .request(
+            _webSocket!
+                .sendRequest(
                   'connectWebRtcTransport',
                   {
                     'transportId': _recvTransport!.id,
@@ -4258,7 +4268,7 @@ class Room {
           } catch (error) {}
 
           if (connectionState['connectionState'] == 'failed') {
-            _close("Network Error");
+            _failedclosed();
           }
         });
 
@@ -4358,8 +4368,7 @@ class Room {
   void end() {
     if (_webSocket == null) {
       _eventEmitter.emit("error", VideoSDKErrors[3022]);
-      print(
-          "An error occurred in end(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      log("An error occurred in end(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
 
       return;
     }
@@ -4371,15 +4380,14 @@ class Room {
         spanName: 'end() method called \n closeRoom request send',
       );
     }
-    _webSocket?.socket.request('closeRoom', {});
+    _webSocket!.sendRequest('closeRoom', {});
     _close();
   }
 
   void leave() {
     if (_webSocket == null) {
       _eventEmitter.emit("error", VideoSDKErrors[3022]);
-      print(
-          "An error occurred in leave(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      log("An error occurred in leave(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
 
       return;
     }
@@ -4449,6 +4457,8 @@ class Room {
     }
 
     _eventEmitter.emit("meeting-left", errorMsg);
+    _eventEmitter.emit('meeting-state-changed', RoomState.disconnected);
+
     try {
       if (videoSDKTelemetery != null) {
         videoSDKTelemetery!.traceAutoComplete(
@@ -4463,6 +4473,101 @@ class Room {
     } catch (error) {}
   }
 
+  void _failedclosed([String? errorMsg]) {
+    if (_closed) {
+      return;
+    }
+
+    try {
+      if (videoSDKTelemetery != null) {
+        videoSDKTelemetery!.traceAutoComplete(
+          spanName: 'Meeting is in Reconnection State',
+        );
+      }
+    } catch (error) {
+      VideoSDKLog.createLog(
+          message: "Error in webSocket onReconnection \n ${error.toString()}",
+          logLevel: "ERROR");
+      log("Error in webSocket onReconnection $error");
+    }
+    _closeForegroundService();
+
+    if (_micProducer != null) {
+      if (!_micProducer!.closed && _micProducer!.paused) {
+        _micProducer!.resume();
+      }
+      _micProducer!.track.stop();
+      _micProducer!.close();
+
+      _removeProducer(_micProducer!, _ProducerType.micProducer);
+      _micInProgress = false;
+      _micProducer = null;
+      _customMicrophoneAudioTrack?.dispose();
+      _customMicrophoneAudioTrack = null;
+    }
+
+    if (_cameraProducer != null) {
+      //
+
+      _removeProducer(_cameraProducer!, _ProducerType.cameraProducer);
+      _cameraInProgress = false;
+      _cameraProducer = null;
+      _customCameraVideoTrack?.dispose();
+      _customCameraVideoTrack = null;
+    }
+    if (_screenShareAudioProducer != null) {
+      _removeProducer(
+          _screenShareAudioProducer!, _ProducerType.screenShareAudioProducer);
+
+      if (!_screenShareAudioProducer!.closed &&
+          _screenShareAudioProducer!.paused) {
+        _screenShareAudioProducer!.resume();
+      }
+      _screenShareInProgress = false;
+      _screenShareAudioProducer!.track.stop();
+      _screenShareAudioProducer!.close();
+
+      _screenShareAudioProducer = null;
+    }
+    if (_screenshareProducer != null) {
+      _removeProducer(_screenshareProducer!, _ProducerType.screenshareProducer);
+
+      if (!_screenshareProducer!.closed && _screenshareProducer!.paused) {
+        _screenshareProducer!.resume();
+      }
+      _screenShareInProgress = false;
+      _screenshareProducer!.track.stop();
+      _screenshareProducer!.close();
+      _screenshareProducer = null;
+    }
+
+    if (_sendTransport != null) {
+      _sendTransport!.close();
+      _sendTransport = null;
+    }
+
+    if (_recvTransport != null) {
+      _recvTransport!.close();
+      _recvTransport = null;
+    }
+  }
+
+  bool isSendAndReceiveMode(Mode currentMode) {
+    if (currentMode == Mode.SEND_AND_RECV || currentMode == Mode.CONFERENCE) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  bool isViewerMode(Mode currentMode) {
+    if (currentMode == Mode.SIGNALLING_ONLY || currentMode == Mode.VIEWER) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   Future<void> changeMode(Mode requestedMode) async {
     Mode currentMode = _mode;
     Span? changeModeSpan;
@@ -4471,8 +4576,7 @@ class Room {
 
     if (_webSocket == null) {
       _eventEmitter.emit("error", VideoSDKErrors[3022]);
-      print(
-          "An error occurred in changeMode(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
+      log("An error occurred in changeMode(): the method was called while the meeting was in the connecting state. Please try again after joining the meeting.");
       return;
     }
 
@@ -4499,8 +4603,7 @@ class Room {
             logLevel: "ERROR",
             attributes: attributes,
             dashboardLog: true);
-        print(
-            "An error occurred in changeMode(): You are already in the $requestedMode mode. Please select a different mode and try again.");
+        log("An error occurred in changeMode(): You are already in the $requestedMode mode. Please select a different mode and try again.");
 
         //
         if (changeModeSpan != null) {
@@ -4513,20 +4616,21 @@ class Room {
         return;
       }
       _mode = requestedMode;
-      if (requestedMode == Mode.CONFERENCE) {
-        log("Changing mode to Conference");
+      if (requestedMode == Mode.SEND_AND_RECV ||
+          requestedMode == Mode.CONFERENCE) {
+        _produce = true;
         _consume = true;
-
         try {
           if (changeModeSpan != null) {
             routerSpan = videoSDKTelemetery!.trace(
-                spanName: 'Loading Router Capabilities', span: changeModeSpan);
+              spanName: 'Loading Router Capabilities',
+              span: changeModeSpan,
+            );
           }
         } catch (error) {}
 
         dynamic routerRtpCapabilities =
-            await _webSocket!.socket.request('getRouterRtpCapabilities', {});
-
+            await _webSocket!.sendRequest('getRouterRtpCapabilities', {});
         final rtpCapabilities = RtpCapabilities.fromMap(routerRtpCapabilities);
         rtpCapabilities.headerExtensions
             .removeWhere((he) => he.uri == 'urn:3gpp:video-orientation');
@@ -4557,8 +4661,7 @@ class Room {
               logLevel: "ERROR",
               attributes: attributes,
               dashboardLog: true);
-          print(
-              "An error occurred in changeMode(): VIDEOSDK ERROR :: ${VideoSDKErrors[3021]?['code']}  :: ${VideoSDKErrors[3021]?['name']} :: ${VideoSDKErrors[3021]?['message']}");
+          log("An error occurred in changeMode(): VIDEOSDK ERROR :: ${VideoSDKErrors[3021]?['code']}  :: ${VideoSDKErrors[3021]?['name']} :: ${VideoSDKErrors[3021]?['message']}");
           return;
         }
 
@@ -4582,18 +4685,21 @@ class Room {
 
         await _createSendTransport(parentSpan: changeModeSpan);
 
-        await _createReceiveTransport(parentSpan: changeModeSpan);
+        if (currentMode != Mode.RECV_ONLY) {
+          await _createReceiveTransport(parentSpan: changeModeSpan);
+        }
 
         try {
           if (changeModeSpan != null) {
             requestSpan = videoSDKTelemetery!.trace(
-                spanName: 'Sending changeMode request to server',
-                span: changeModeSpan);
+              spanName: 'Sending changeMode request to server',
+              span: changeModeSpan,
+            );
           }
         } catch (error) {}
 
-        _webSocket?.socket
-            .request("changeMode", {"mode": requestedMode.parseToString()});
+        await _webSocket!
+            .sendRequest('changeMode', {"mode": requestedMode.parseToString()});
 
         try {
           if (requestSpan != null) {
@@ -4623,12 +4729,18 @@ class Room {
             }
           }
         }
-
-        _eventEmitter.emit("participant-mode-changed-${localParticipant.id}",
-            {'participantId': localParticipant.id, 'mode': 'CONFERENCE'});
-        _eventEmitter.emit("participant-mode-changed",
-            {'participantId': localParticipant.id, 'mode': 'CONFERENCE'});
-
+        if (requestedMode == Mode.SEND_AND_RECV) {
+          _eventEmitter.emit("participant-mode-changed-${localParticipant.id}",
+              {'participantId': localParticipant.id, 'mode': 'SEND_AND_RECV'});
+          _eventEmitter.emit("participant-mode-changed",
+              {'participantId': localParticipant.id, 'mode': 'SEND_AND_RECV'});
+        }
+        if (requestedMode == Mode.CONFERENCE) {
+          _eventEmitter.emit("participant-mode-changed-${localParticipant.id}",
+              {'participantId': localParticipant.id, 'mode': 'CONFERENCE'});
+          _eventEmitter.emit("participant-mode-changed",
+              {'participantId': localParticipant.id, 'mode': 'CONFERENCE'});
+        }
         try {
           if (changeModeSpan != null) {
             videoSDKTelemetery!.traceAutoComplete(
@@ -4638,7 +4750,8 @@ class Room {
             requestSpan = null;
           }
         } catch (error) {}
-      } else if (requestedMode == Mode.VIEWER) {
+      } else if (requestedMode == Mode.SIGNALLING_ONLY ||
+          requestedMode == Mode.VIEWER) {
         try {
           if (changeModeSpan != null) {
             requestSpan = videoSDKTelemetery!.trace(
@@ -4646,9 +4759,17 @@ class Room {
                 span: changeModeSpan);
           }
         } catch (error) {}
+        _consume = false;
+        _produce = false;
 
-        _webSocket?.socket
-            .request("changeMode", {"mode": requestedMode.parseToString()});
+        _sendTransport?.close();
+        _sendTransport = null;
+
+        _recvTransport?.close();
+        _recvTransport = null;
+
+        await _webSocket?.sendRequest(
+            "changeMode", {"mode": requestedMode.parseToString()});
 
         try {
           if (requestSpan != null) {
@@ -4659,22 +4780,64 @@ class Room {
             requestSpan = null;
           }
         } catch (error) {}
+      } else if (isViewerMode(currentMode) && requestedMode == Mode.RECV_ONLY) {
+        try {
+          if (changeModeSpan != null) {
+            requestSpan = videoSDKTelemetery!.trace(
+                spanName: 'Sending changeMode request to server',
+                span: changeModeSpan);
+          }
+        } catch (error) {}
+        _consume = true;
+        _createReceiveTransport();
 
-        _consume = false;
+        await _webSocket?.sendRequest(
+            "changeMode", {"mode": requestedMode.parseToString()});
+
+        try {
+          if (requestSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: requestSpan,
+                message: 'ChangeMode Request To Server Sent Successfully',
+                status: StatusCode.ok);
+            requestSpan = null;
+          }
+        } catch (error) {}
+      } else if (isSendAndReceiveMode(currentMode) &&
+          requestedMode == Mode.RECV_ONLY) {
+        try {
+          if (changeModeSpan != null) {
+            requestSpan = videoSDKTelemetery!.trace(
+                spanName: 'Sending changeMode request to server',
+                span: changeModeSpan);
+          }
+        } catch (error) {}
+
         _produce = false;
 
         _sendTransport?.close();
         _sendTransport = null;
 
-        _recvTransport?.close();
-        _recvTransport = null;
+        await _webSocket!
+            .sendRequest("changeMode", {"mode": requestedMode.parseToString()});
+
+        try {
+          if (requestSpan != null) {
+            videoSDKTelemetery!.completeSpan(
+                span: requestSpan,
+                message: 'ChangeMode Request To Server Sent Successfully',
+                status: StatusCode.ok);
+            requestSpan = null;
+          }
+        } catch (error) {}
       }
 
       if (changeModeSpan != null) {
         videoSDKTelemetery!.completeSpan(
-            span: changeModeSpan,
-            status: StatusCode.ok,
-            message: 'Change Mode Successfully');
+          span: changeModeSpan,
+          status: StatusCode.ok,
+          message: 'Change Mode Successfully',
+        );
       }
     } catch (error) {
       //
@@ -4688,20 +4851,21 @@ class Room {
           logLevel: "ERROR",
           attributes: attributes,
           dashboardLog: true);
-      print(
-          "An error occurred in changeMode(): VIDEOSDK ERROR :: ${VideoSDKErrors[3021]?['code']}  :: ${VideoSDKErrors[3021]?['name']} :: ${VideoSDKErrors[3021]?['message']}");
+      log("An error occurred in changeMode(): VIDEOSDK ERROR :: ${VideoSDKErrors[3021]?['code']}  :: ${VideoSDKErrors[3021]?['name']} :: ${VideoSDKErrors[3021]?['message']}");
 
       if (routerSpan != null) {
         videoSDKTelemetery!.completeSpan(
-            span: routerSpan,
-            status: StatusCode.error,
-            message: 'Router Capabilities Loading Failed');
+          span: routerSpan,
+          status: StatusCode.error,
+          message: 'Router Capabilities Loading Failed',
+        );
       }
       if (requestSpan != null) {
         videoSDKTelemetery!.completeSpan(
-            span: requestSpan,
-            status: StatusCode.error,
-            message: 'Sending Request to the Server Failed');
+          span: requestSpan,
+          status: StatusCode.error,
+          message: 'Sending Request to the Server Failed',
+        );
       }
       if (changeModeSpan != null) {
         videoSDKTelemetery!.completeSpan(
@@ -4733,7 +4897,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request("requestEntry", <String, dynamic>{
+        await _webSocket!.sendRequest('requestEntry', <String, dynamic>{
           'name': localParticipant.displayName,
         });
       } else {
@@ -4789,7 +4953,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request("respondEntry",
+        await _webSocket!.sendRequest("respondEntry",
             <String, dynamic>{'id': peerId, 'decision': decision});
       } else {
         try {
@@ -4865,7 +5029,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('startRecording', data);
+        await _webSocket!.sendRequest('startRecording', data);
 
         if (startRecordingSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -4908,8 +5072,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('stopRecording', {});
-
+        await _webSocket!.sendRequest('stopRecording', {});
         if (stopRecordingSpan != null) {
           videoSDKTelemetery!.completeSpan(
               span: stopRecordingSpan,
@@ -4972,7 +5135,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('startLivestream', data);
+        await _webSocket!.sendRequest('startLivestream', data);
 
         if (startLivestreamSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -5016,7 +5179,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('stopLivestream', {});
+        await _webSocket!.sendRequest('stopLivestream', {});
 
         if (stopLivestreamSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -5077,8 +5240,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('startHls', data);
-
+        await _webSocket!.sendRequest('startHls', data);
         if (startHlsSpan != null) {
           videoSDKTelemetery!.completeSpan(
               span: startHlsSpan,
@@ -5121,8 +5283,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('stopHls', {});
-
+        await _webSocket!.sendRequest('stopHls', {});
         if (stopHlsSpan != null) {
           videoSDKTelemetery!.completeSpan(
               span: stopHlsSpan,
@@ -5178,8 +5339,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('startTranscription', data);
-
+        await _webSocket!.sendRequest('startTranscription', data);
         if (startTranscriptionSpan != null) {
           videoSDKTelemetery!.completeSpan(
               span: startTranscriptionSpan,
@@ -5223,7 +5383,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('stopTranscription', {});
+        await _webSocket!.sendRequest('stopTranscription', {});
 
         if (stopTranscriptionSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -5389,7 +5549,6 @@ class Room {
     return true;
   }
 
-  //
   // @Deprecated("Use VideoSDK.getAudioDevices() method instead")
   // List<MediaDeviceInfo> getMics() {
   //   if (!_isMobilePlatform()) {
@@ -5417,7 +5576,6 @@ class Room {
   // }
 
   Future<void> switchAudioDevice(AudioDeviceInfo device) async {
-
     Span? switchAudioDeviceSpan;
     try {
       if (videoSDKTelemetery != null) {
@@ -5630,7 +5788,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('enablePeerMic', {
+        await _webSocket!.sendRequest('enablePeerMic', {
           "peerId": peerId,
         });
       } else {
@@ -5686,7 +5844,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('disablePeerMic', {
+        await _webSocket!.sendRequest('disablePeerMic', {
           "peerId": peerId,
         });
       } else {
@@ -5745,7 +5903,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('enablePeerWebcam', {
+        await _webSocket!.sendRequest('enablePeerWebcam', {
           "peerId": peerId,
         });
       } else {
@@ -5803,7 +5961,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('disablePeerWebcam', {
+        await _webSocket!.sendRequest('disablePeerWebcam', {
           "peerId": peerId,
         });
       } else {
@@ -5861,7 +6019,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('removePeer', {
+        await _webSocket!.sendRequest('removePeer', {
           "peerId": peerId,
         });
       } else {
@@ -5957,6 +6115,7 @@ class Room {
             );
 
             _cameraProducer = producer;
+
             break;
           }
         case 'screen':
@@ -6071,6 +6230,7 @@ class Room {
   // Peer
   //
   void _addPeer(Map<String, dynamic> newPeer, Span? span) {
+    print("Hello new peer joined");
     try {
       final Peer peer = Peer.fromMap(newPeer);
       //
@@ -6090,7 +6250,7 @@ class Room {
 
   void _addCharacterPeer(Map<String, dynamic> newPeer, Span? span) {
     try {
-      newPeer.addAll({"mode": Mode.CONFERENCE.name});
+      newPeer.addAll({"mode": Mode.SEND_AND_RECV.name});
       final Peer peer = Peer.fromMap(newPeer);
       //
       _peers[peer.id] = peer;
@@ -6804,7 +6964,7 @@ class Room {
   Future<void> _pubsubPublish({topic, message, options, payload}) async {
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('pubsubPublish', {
+        await _webSocket!.sendRequest('pubsubPublish', {
           'topic': topic,
           'message': message,
           'options': options,
@@ -6829,8 +6989,8 @@ class Room {
   Future<dynamic> _pubsubSubscribe(topic) async {
     try {
       if (_webSocket != null) {
-        var msgList = await _webSocket!.socket
-            .request('pubsubSubscribe', {'topic': topic});
+        var msgList =
+            await _webSocket!.sendRequest('pubsubSubscribe', {'topic': topic});
         return msgList;
       } else {
         _eventEmitter.emit("error", VideoSDKErrors[3022]);
@@ -6851,7 +7011,7 @@ class Room {
   Future<void> _pubsubUnsubscribe(topic) async {
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('pubsubUnsubscribe', {'topic': topic});
+        await _webSocket!.sendRequest('pubsubUnsubscribe', {'topic': topic});
       } else {
         _eventEmitter.emit("error", VideoSDKErrors[3022]);
         print(
@@ -6922,7 +7082,7 @@ class Room {
   ) async {
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('setConsumerPreferredLayers', {
+        await _webSocket!.sendRequest('setConsumerPreferredLayers', {
           "consumerId": consumerId,
           "spatialLayer": spatialLayer,
           "temporalLayer": temporalLayer,
@@ -7015,7 +7175,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        var response = await _webSocket!.socket.request("joinCharacter", data);
+        var response = await _webSocket!.sendRequest("joinCharacter", data);
 
         if (joinCharacterSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -7063,7 +7223,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request("leaveCharacter", data);
+        await _webSocket!.sendRequest("leaveCharacter", data);
 
         if (removeCharacterSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -7097,7 +7257,7 @@ class Room {
   void _sendCharacterMessage(interactionId, text) async {
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request("sendCharacterMessage",
+        await _webSocket!.sendRequest("sendCharacterMessage",
             {"interactionId": interactionId, "text": text});
       } else {
         _eventEmitter.emit("error", VideoSDKErrors[3022]);
@@ -7118,8 +7278,8 @@ class Room {
   void _interruptCharacter(interactionId) async {
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket
-            .request("interruptCharacter", {"interactionId": interactionId});
+        await _webSocket!.sendRequest(
+            "interruptCharacter", {"interactionId": interactionId});
       } else {
         _eventEmitter.emit("error", VideoSDKErrors[3022]);
         print(
@@ -7149,7 +7309,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request("startWhiteboard", {
+        await _webSocket!.sendRequest("startWhiteboard", {
           "version": "v2",
         });
 
@@ -7194,7 +7354,7 @@ class Room {
 
     try {
       if (_webSocket != null) {
-        await _webSocket!.socket.request('stopWhiteboard', {});
+        await _webSocket!.sendRequest('stopWhiteboard', {});
 
         if (stopWBSpan != null) {
           videoSDKTelemetery!.completeSpan(
@@ -7232,4 +7392,11 @@ enum _ProducerType {
   cameraProducer,
   screenshareProducer,
   screenShareAudioProducer
+}
+
+enum RoomState {
+  connecting,
+  connected,
+  reconnecting,
+  disconnected,
 }

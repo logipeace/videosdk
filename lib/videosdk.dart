@@ -9,7 +9,7 @@ export 'src/core/room/custom_track_configs.dart'
 export 'src/core/room/errors.dart' show VideoSDKErrors;
 export 'src/core/pubsub/pubsub_message.dart' show PubSubMessages, PubSubMessage;
 export 'src/core/pubsub/pubsub_publish_options.dart' show PubSubPublishOptions;
-export 'src/core/room/room.dart' show Room;
+export 'src/core/room/room.dart' show Room,RoomState;
 export 'src/core/room/room_mode.dart' show Mode;
 export 'src/core/videosdk.dart' show VideoSDK, MediaDeviceType, PreferredProtocol, FacingMode;
 export 'src/core/device_info.dart'
@@ -32,3 +32,4 @@ export 'src/core/room/transcription/transcription_text.dart' show TranscriptionT
 export 'src/core/room/character_config.dart' show CharacterConfig,CharacterMode,CharacterState;
 export 'src/core/room/character.dart' show Character;
 export 'src/core/room/character_message.dart' show CharacterMessage;
+export 'src/core/room/user_message.dart' show UserMessage;

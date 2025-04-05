@@ -1,6 +1,6 @@
 name: videosdk
 description: Video SDK Flutter to simply integrate Audio & Video Calling API or Live Video Streaming API to your app with just a few lines of code.
-version: 1.2.2
+version: 2.0.0
 homepage: "https://videosdk.live/"
 repository: "https://github.com/videosdk-live/videosdk-rtc-flutter-sdk-example"
 documentation: https://docs.videosdk.live/
@@ -15,29 +15,34 @@ dependencies:
     sdk: flutter
   flutter_web_plugins:
     sdk: flutter
-  plugin_platform_interface: ^2.1.4
+  plugin_platform_interface: ^2.1.8
   random_string: ^2.3.1
   events2: ^1.0.0
-  collection: ^1.16.0
+  collection: ^1.18.0
   sdp_transform: ^0.3.2
-  h264_profile_level_id: ^0.2.0
-  flutter_foreground_task: 6.1.3
-  synchronized: ^3.0.1
-  http: ^1.0.0
-  encrypt: ^5.0.1
+  h264_profile_level_id: ^0.2.1
+  flutter_foreground_task: 8.17.0
+  synchronized: ^3.3.0
+  http: ^1.2.2
+  encrypt: ^5.0.3
   videosdk_room_stats: 0.0.4
   videosdk_otel: ^0.0.2
-  dart_webrtc: 1.4.4
-  device_info_plus: 10.1.0
-  platform_detect: 2.0.11
-  web: 0.5.1
+  dart_webrtc: ^1.5.1
+  device_info_plus: 11.3.0
+  platform_detect: 2.1.0
+  web: 1.1.0
   permission_handler: 11.3.1
-  videosdk_webrtc: ^0.0.3
+  videosdk_webrtc: ^0.0.7
+  socket_io_client: ^3.0.2
+
+
+
+
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^2.0.1
+  flutter_lints: ^5.0.0
 
 # The following section is specific to Flutter.
 flutter:

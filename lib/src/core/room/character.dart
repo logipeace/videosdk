@@ -37,7 +37,7 @@ class Character extends Participant {
             displayName: characterConfig.toJson()['displayName'],
             isLocal: false,
             pinState: ParticipantPinState(),
-            mode: Mode.CONFERENCE,
+            mode: Mode.SEND_AND_RECV,
             eventEmitter: eventEmitter,
             enablePeerMic: enablePeerMic,
             disablePeerMic: disablePeerMic,
@@ -83,6 +83,10 @@ class Character extends Participant {
       _characterEventEmitter.emit("character-message", message);
     });
 
+    _eventEmitter.on("USER_MESSAGE", (message) {
+      _characterEventEmitter.emit("user-message", message);
+    });
+
     _eventEmitter.on("CHARACTER_STATE_CHANGED", (data) {
       if (CharacterState.values.any((value) => value.name == data['status'])) {
         this.state = CharacterState.values
@@ -94,7 +98,7 @@ class Character extends Participant {
 
   void join() async {
     var res = await _joinCharacter(characterConfig: _characterConfig);
-  
+
     if (res != false) {
       id = res['characterId'];
       displayName = res['displayName'];

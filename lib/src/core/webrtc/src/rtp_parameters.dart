@@ -806,7 +806,7 @@ class RtcpParameters extends RTCRTCPParameters {
   }) {
     return RtcpParameters(
       mux: mux != null ? mux : old.mux,
-      cname: cname != null ? cname : old.cname,
+      cname: cname != null ? cname : old.cname ?? "",
       reducedSize: reducedSize != null ? reducedSize : old.reducedSize,
     );
   }
