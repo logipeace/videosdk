@@ -37,7 +37,7 @@ class VideoSDK {
       String participantId = '',
       String maxResolution = 'sd',
       int defaultCameraIndex = 0,
-      bool multiStream = true,
+      bool multiStream = false,
       CustomTrack? customCameraVideoTrack,
       CustomTrack? customMicrophoneAudioTrack,
       NotificationInfo notification = const NotificationInfo(
@@ -45,7 +45,8 @@ class VideoSDK {
         message: "Video SDK is sharing screen in the meeting",
         icon: "notification_share",
       ),
-      Mode mode = Mode.CONFERENCE,
+      // Mode mode = Mode.CONFERENCE,
+      Mode mode = Mode.SEND_AND_RECV,
       Map<String, dynamic> metaData = const {},
       String signalingBaseUrl = '',
       PreferredProtocol preferredProtocol = PreferredProtocol.UDP_OVER_TCP,
@@ -110,6 +111,7 @@ class VideoSDK {
             if (!kIsWeb) {
               if (Platform.isIOS) {
                 // set videoChat mode whenever new device connected
+                // Fix audio 1.0.42+351
                 // setAppleAudioConfiguration();
               }
             }
@@ -298,6 +300,7 @@ class VideoSDK {
     if (!kIsWeb) {
       if (Platform.isIOS) {
         // setting AppleAudioConfiguration to get bluetooth device in the list
+        // Fix audio 1.0.42+351
         // setAppleAudioConfiguration();
       }
     }
@@ -364,7 +367,9 @@ class VideoSDK {
           AppleAudioCategoryOption.allowBluetooth,
           AppleAudioCategoryOption.allowBluetoothA2DP
         },
-        appleAudioMode: AppleAudioMode.videoChat));
+        // Fix audio 1.0.42+351
+        // appleAudioMode: AppleAudioMode.videoChat));
+        appleAudioMode: AppleAudioMode.voiceChat));
   }
 
   static Future<List<DeviceInfo>?> getDevices() async {
@@ -793,7 +798,7 @@ class VideoSDK {
       CustomVideoTrackConfig encoderConfig = CustomVideoTrackConfig.h360p_w640p,
       FacingMode facingMode = FacingMode.user,
       // String optimizationMode = "motion",
-      bool multiStream = true}) async {
+      bool multiStream = false}) async {
     late Map<String, dynamic> mediaConstraints;
     String? selectedCameraId;
 

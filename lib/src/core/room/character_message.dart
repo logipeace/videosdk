@@ -1,28 +1,28 @@
 class CharacterMessage {
   CharacterMessage({
     required this.text,
-    required this.participantId,
-    required this.participantName,
+    required this.characterId,
+    required this.characterName,
     required this.timestamp,
   });
 
   String text;
-  String participantId;
-  String participantName;
+  String characterId;
+  String characterName;
   int timestamp;
 
   factory CharacterMessage.fromJson(Map<String, dynamic> json) =>
       CharacterMessage(
         text: json["text"],
-        participantId: json["participantId"],
-        participantName: json["participantName"],
+        characterId: json["characterId"],
+        characterName: json["characterName"],
         timestamp: json["timestamp"],
       );
 
   Map<String, dynamic> toJson() => {
         "text": text,
-        "participantId": participantId,
-        "participantName": participantName,
+        "characterId": characterId,
+        "characterName": characterName,
         "timestamp": timestamp,
       };
 }

@@ -28,26 +28,25 @@ class Participant {
       _removePeer,
       _participantPinStateChanged;
   late ParticipantPinState pinState;
-  Map<String,dynamic>? metaData;
+  Map<String, dynamic>? metaData;
 
-  Participant({
-    required this.id,
-    required this.displayName,
-    required this.isLocal,
-    required this.pinState,
-    required this.mode,
-    required EventEmitter eventEmitter,
-    required Function enablePeerMic,
-    required Function disablePeerMic,
-    required Function enablePeerCamera,
-    required Function disablePeerCamera,
-    required Function setConsumerQuality,
-    required Function getStats,
-    required Function setViewPort,
-    required Function removePeer,
-    required Function participantPinStateChanged,
-    this.metaData
-  }) {
+  Participant(
+      {required this.id,
+      required this.displayName,
+      required this.isLocal,
+      required this.pinState,
+      required this.mode,
+      required EventEmitter eventEmitter,
+      required Function enablePeerMic,
+      required Function disablePeerMic,
+      required Function enablePeerCamera,
+      required Function disablePeerCamera,
+      required Function setConsumerQuality,
+      required Function getStats,
+      required Function setViewPort,
+      required Function removePeer,
+      required Function participantPinStateChanged,
+      this.metaData}) {
     //
     _eventEmitter = eventEmitter;
     //
@@ -178,6 +177,7 @@ class Participant {
 
     _eventEmitter.on("participant-mode-changed-$id", (data) {
       mode = ModeExtension.parseToEnum(data['mode']);
+      print("data :$data");
     });
   }
 
@@ -186,6 +186,7 @@ class Participant {
   on(Events event, handler) {
     _participantEventEmitter.on(event.parseToString(), handler);
   }
+
   off(Events event, Function handler) {
     _participantEventEmitter.remove(event.parseToString(), handler);
   }

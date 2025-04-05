@@ -15,7 +15,7 @@ class Peer {
   final RTCVideoRenderer? audioRenderer;
   final RTCVideoRenderer? renderer;
   final RTCVideoRenderer? shareRenderer;
-  final Map<String,dynamic>? metaData;
+  final Map<String, dynamic>? metaData;
 
   const Peer({
     this.audio,
@@ -37,9 +37,10 @@ class Peer {
         device =
             null, // data['device'] != null ? PeerDevice.fromMap(data['device']) : null,
         mode = ModeExtension.parseToEnum(data['mode']),
+
         //
         audio = null,
-        audioRenderer=null,
+        audioRenderer = null,
         //
         video = null,
         renderer = null,
@@ -47,7 +48,6 @@ class Peer {
         share = null,
         shareRenderer = null,
         metaData = data['metaData'];
-
 
   List<String> get consumers => [
         if (audio != null) audio!.id,
@@ -70,22 +70,20 @@ class Peer {
     RTCVideoRenderer? shareRenderer,
   }) {
     return Peer(
-      id: id ?? this.id,
-      displayName: displayName ?? this.displayName,
-      device: device ?? this.device,
-      mode: mode,
-      //
-      audio: audio ?? this.audio,
-      audioRenderer: audioRenderer ?? this.audioRenderer,
-      //
-      video: video ?? this.video,
-      renderer: renderer ?? this.renderer,
-      //
-      share: share ?? this.share,
-      shareRenderer: shareRenderer ?? this.shareRenderer,
-
-      metaData: metaData
-    );
+        id: id ?? this.id,
+        displayName: displayName ?? this.displayName,
+        device: device ?? this.device,
+        mode: mode,
+        //
+        audio: audio ?? this.audio,
+        audioRenderer: audioRenderer ?? this.audioRenderer,
+        //
+        video: video ?? this.video,
+        renderer: renderer ?? this.renderer,
+        //
+        share: share ?? this.share,
+        shareRenderer: shareRenderer ?? this.shareRenderer,
+        metaData: metaData);
   }
 
   Peer removeAudio({

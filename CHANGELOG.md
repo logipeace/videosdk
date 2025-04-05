@@ -1,3 +1,71 @@
+## v2.0.0
+
+**Release Date** : 1st March 2025
+
+**Change Log** :
+
+1. Enhanced Room/Meeting Connection Flow: 
+  - A `RECONNECTING` state has been introduced that activates if the network connection is lost during a meeting. The SDK will automatically try to rejoin, enhancing reliability. 
+  - The `FAILED`, `CLOSING`, and `CLOSED` states have been eliminated. All disconnection scenarios will now be managed by the `DISCONNECTED` state for a more streamlined experience.
+
+## v1.3.2+1
+
+**Release Date** : 31st March 2025
+
+**Change Log** :
+
+1. Updated internal dependencies.
+
+## v1.3.1
+
+**Release Date** : 25th February 2025
+
+**Change Log** :
+
+1. Updated internal dependencies.
+
+## v1.3.0
+
+**Release Date** : 22nd January 2025
+
+**Change Log** :
+
+1. Deprecated Modes: Replaced `CONFERENCE` with `SEND_AND_RECV` and `VIEWER` with `SIGNALLING_ONLY`.
+2. New Mode: Added `RECV_ONLY` for live streaming, allowing participants to receive media without sending it.
+3. Role Switching: Enabled seamless role switching between `SEND_AND_RECV` (host) and `RECV_ONLY` (audience) using `changeMode()` method.
+
+## v1.2.5
+
+**Release Date** : 18th December 2024
+
+**Bug Fix**:
+
+1. Fixed issues related to Flutter version 3.27.
+
+**Change Log** :
+
+1. Updated internal dependencies.
+
+
+## v1.2.4
+
+**Release Date** : 17th December 2024
+
+**Change Log** :
+
+1. Added `roomStateChanged` Event.
+
+
+## v1.2.3
+
+**Release Date** : 24th October 2024
+
+**Change Log** :
+
+1. Dependencies updated to latest version.
+
+2. Provided event `onUserMessage` in `Character` class.
+
 
 ## v1.2.2
 

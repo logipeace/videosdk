@@ -3,6 +3,7 @@ enum Events {
   // Room Events
   roomJoined,
   roomLeft,
+  roomStateChanged,
 
   // Entry Events
   entryRequested,
@@ -58,6 +59,7 @@ enum Events {
   characterJoined,
   characterLeft,
   characterMessage,
+  userMessage,
   characterStateChanged,
   
   //Whiteboard events
@@ -100,9 +102,11 @@ Map<Events, String> eventsMap = {
   Events.characterJoined: 'character-joined',
   Events.characterLeft: 'character-left',
   Events.characterMessage: 'character-message',
+  Events.userMessage: 'user-message',
   Events.characterStateChanged: 'character-state-changed',
   Events.whiteboardStarted: 'whiteboard-started',
-  Events.whiteboardStopped: 'whiteboard-stopped'
+  Events.whiteboardStopped: 'whiteboard-stopped',
+  Events.roomStateChanged: 'meeting-state-changed'
 };
 
 extension ParseToString on Events {
