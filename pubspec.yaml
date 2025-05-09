@@ -32,7 +32,7 @@ dependencies:
   platform_detect: 2.1.0
   web: 1.1.0
   permission_handler: 11.3.1
-  videosdk_webrtc: ^0.0.7
+  videosdk_webrtc: ^0.0.8
   socket_io_client: ^3.0.2
 
 
